@@ -8,6 +8,7 @@ import com.example.streaming.Dto.ReservationResponse;
 import com.example.streaming.Dto.SeatResponse;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatStatus;
+import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Service.CustomUserDetailService;
 import com.example.streaming.Service.EventService;
 import com.example.streaming.Service.ReservationService;
@@ -28,9 +29,13 @@ import java.time.LocalDateTime;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -113,6 +118,42 @@ class ReservationControllerTest {
                 .andExpect(jsonPath("$.reservationId").value(999))
                 .andExpect(jsonPath("$.userId").value(7))
                 .andExpect(jsonPath("$.status").value("RESERVED"));
+    }
+
+    @Test
+    @DisplayName("예약 취소 시 토큰의 사용자로 처리하고 204를 반환한다")
+    void cancel() throws Exception {
+        mockMvc.perform(delete("/events/reservations/{reservationId}", 999L)
+                        .with(jwt().jwt(token -> token.subject("7"))))
+                .andExpect(status().isNoContent());
+        verify(reservationService).cancel(999L, 7L);
+    }
+
+    @Test
+    @DisplayName("타인의 예약을 취소하면 403을 반환한다")
+    void cancel_forbidden() throws Exception {
+        willThrow(new ForbiddenException("예약자가 아닙니다")).given(reservationService).cancel(999L, 7L);
+        mockMvc.perform(delete("/events/reservations/{reservationId}", 999L)
+                        .with(jwt().jwt(token -> token.subject("7"))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("예약자가 아닙니다"));
+    }
+
+    @Test
+    @DisplayName("예약 취소에 토큰이 없으면 401을 반환하고 서비스를 호출하지 않는다")
+    void cancel_withoutToken() throws Exception {
+        mockMvc.perform(delete("/events/reservations/{reservationId}", 999L))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(reservationService);
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 예약 취소는 기존 예외 정책에 따라 400을 반환한다")
+    void cancel_notFound() throws Exception {
+        willThrow(new IllegalArgumentException("예약이 존재하지 않습니다")).given(reservationService).cancel(999L, 7L);
+        mockMvc.perform(delete("/events/reservations/{reservationId}", 999L)
+                        .with(jwt().jwt(token -> token.subject("7"))))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
