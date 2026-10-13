@@ -9,6 +9,7 @@ import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.SeatStatus;
 import com.example.streaming.Entity.UserEntity;
 import com.example.streaming.Exception.SeatUnavailableException;
+import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Repository.ReservationRepository;
 import com.example.streaming.Repository.SeatRepository;
 import com.example.streaming.Repository.UserRepository;
@@ -174,6 +175,57 @@ class ReservationServiceTest {
         assertThatThrownBy(() -> reservationService.holdSeat(1L, 100L, 1L))
                 .isInstanceOf(SeatUnavailableException.class)
                 .hasMessage("이미 예약된 좌석입니다.");
+    }
+
+    @Test
+    @DisplayName("예약자가 취소하면 취소 상태·시각을 남기고 활성 좌석을 비운다")
+    void cancel_owner() {
+        ReservationEntity reservation = ReservationEntity.reserved(user, seat);
+        given(reservationRepository.findById(999L)).willReturn(Optional.of(reservation));
+
+        reservationService.cancel(999L, 1L);
+
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELED);
+        assertThat(reservation.getActiveSeatId()).isNull();
+        assertThat(reservation.getCanceledAt()).isNotNull();
+        verify(reservationRepository, never()).delete(any());
+        verifyNoInteractions(redisSeatHoldService);
+    }
+
+    @Test
+    @DisplayName("타인은 예약을 취소할 수 없고 예약 상태가 유지된다")
+    void cancel_otherUser() {
+        ReservationEntity reservation = ReservationEntity.reserved(user, seat);
+        given(reservationRepository.findById(999L)).willReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> reservationService.cancel(999L, 2L))
+                .isInstanceOf(ForbiddenException.class);
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.RESERVED);
+        assertThat(reservation.getActiveSeatId()).isEqualTo(seat.getId());
+        assertThat(reservation.getCanceledAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("반복 취소는 최초 취소 시각을 변경하지 않는다")
+    void cancel_repeated() {
+        ReservationEntity reservation = ReservationEntity.reserved(user, seat);
+        reservation.cancel();
+        LocalDateTime canceledAt = LocalDateTime.of(2026, 1, 1, 12, 0);
+        ReflectionTestUtils.setField(reservation, "canceledAt", canceledAt);
+        given(reservationRepository.findById(999L)).willReturn(Optional.of(reservation));
+
+        reservationService.cancel(999L, 1L);
+
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELED);
+        assertThat(reservation.getCanceledAt()).isEqualTo(canceledAt);
+    }
+
+    @Test
+    @DisplayName("존재하지 않는 예약은 취소할 수 없다")
+    void cancel_notFound() {
+        given(reservationRepository.findById(999L)).willReturn(Optional.empty());
+        assertThatThrownBy(() -> reservationService.cancel(999L, 1L))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     // ---------- reserve ----------

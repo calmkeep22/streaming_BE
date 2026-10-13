@@ -1,6 +1,7 @@
 package com.example.streaming.Service;
 
 import com.example.streaming.Entity.EventEntity;
+import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.UserEntity;
@@ -142,6 +143,33 @@ class ReservationConcurrencyTest {
         assertThatThrownBy(() -> reservationService.holdSeat(event.getId(), seat.getId(), other))
                 .isInstanceOf(SeatUnavailableException.class)
                 .hasMessage("이미 예약된 좌석입니다.");
+    }
+
+    @Test
+    @DisplayName("취소를 커밋하면 다른 사용자가 재예약할 수 있고 반복 취소는 새 예약에 영향을 주지 않는다")
+    void cancel_thenReReserve() {
+        Long owner = userIds.get(0);
+        Long nextOwner = userIds.get(1);
+        reservationService.holdSeat(event.getId(), seat.getId(), owner);
+        var first = reservationService.reserve(event.getId(), seat.getId(), owner);
+
+        assertThatThrownBy(() -> reservationService.cancel(first.reservationId(), nextOwner))
+                .isInstanceOf(ForbiddenException.class);
+        assertThat(reservationRepository.findById(first.reservationId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.RESERVED);
+
+        reservationService.cancel(first.reservationId(), owner);
+        assertThat(reservationRepository.findById(first.reservationId()).orElseThrow().getActiveSeatId()).isNull();
+        reservationService.holdSeat(event.getId(), seat.getId(), nextOwner);
+        var second = reservationService.reserve(event.getId(), seat.getId(), nextOwner);
+        reservationService.cancel(first.reservationId(), owner);
+
+        assertThat(reservationRepository.count()).isEqualTo(2);
+        assertThat(reservationRepository.findById(first.reservationId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CANCELED);
+        assertThat(reservationRepository.findById(second.reservationId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.RESERVED);
+        assertThat(redisSeatHoldService.getHolder(seat.getId())).isNull();
     }
 
     @Test

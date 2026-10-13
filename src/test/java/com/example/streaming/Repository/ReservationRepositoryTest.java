@@ -61,4 +61,29 @@ class ReservationRepositoryTest {
         assertThatThrownBy(() -> reservationRepository.saveAndFlush(ReservationEntity.reserved(otherUser, seat)))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
+    @Test
+    @DisplayName("취소된 좌석은 다시 예약할 수 있고 취소 이력은 남는다")
+    void reReserveAfterCancel() {
+        UserEntity otherUser = userRepository.save(new UserEntity("user2@test.com", "password"));
+        ReservationEntity first = reservationRepository.saveAndFlush(ReservationEntity.reserved(user, seat));
+        first.cancel();
+        reservationRepository.saveAndFlush(first);
+        reservationRepository.saveAndFlush(ReservationEntity.reserved(otherUser, seat));
+
+        assertThat(reservationRepository.count()).isEqualTo(2);
+        assertThat(reservationRepository.existsBySeat_IdAndStatus(seat.getId(), ReservationStatus.RESERVED)).isTrue();
+        assertThat(reservationRepository.findById(first.getId()).orElseThrow().getStatus()).isEqualTo(ReservationStatus.CANCELED);
+    }
+
+    @Test
+    @DisplayName("취소 이력이 여러 건이어도 유니크 제약에 걸리지 않는다")
+    void multipleCanceled() {
+        for (int i = 0; i < 2; i++) {
+            ReservationEntity reservation = reservationRepository.saveAndFlush(ReservationEntity.reserved(user, seat));
+            reservation.cancel();
+            reservationRepository.saveAndFlush(reservation);
+        }
+        assertThat(reservationRepository.count()).isEqualTo(2);
+        assertThat(reservationRepository.existsBySeat_IdAndStatus(seat.getId(), ReservationStatus.RESERVED)).isFalse();
+    }
 }
