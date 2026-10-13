@@ -13,7 +13,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * 실제 로컬 Redis로 SET NX / TTL / compareAndDelete 동작을 확인한다. Redis가 없으면 건너뛴다.
@@ -30,7 +29,7 @@ class RedisSeatHoldServiceTest {
 
     @BeforeAll
     static void connect() {
-        assumeTrue(RedisTestSupport.isAvailable(), "로컬 Redis(localhost:6379)가 없어 건너뜁니다.");
+        RedisTestSupport.requireAvailable();
 
         RedisStandaloneConfiguration config = new RedisStandaloneConfiguration(RedisTestSupport.HOST, RedisTestSupport.PORT);
         config.setDatabase(RedisTestSupport.TEST_DATABASE);

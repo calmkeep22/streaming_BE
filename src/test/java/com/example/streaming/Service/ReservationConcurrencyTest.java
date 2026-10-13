@@ -29,7 +29,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * 실제 로컬 Redis + H2로 선점 경쟁과 예약 확정 흐름을 확인한다. Redis가 없으면 건너뛴다.
@@ -61,7 +60,7 @@ class ReservationConcurrencyTest {
 
     @BeforeEach
     void setUp() {
-        assumeTrue(RedisTestSupport.isAvailable(), "로컬 Redis(localhost:6379)가 없어 건너뜁니다.");
+        RedisTestSupport.requireAvailable();
 
         event = eventRepository.save(new EventEntity("콘서트", LocalDateTime.now().plusDays(7)));
         seat = seatRepository.save(new SeatEntity(event, 1));
