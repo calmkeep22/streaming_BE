@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { readSettings, numberOption } from './env.mjs';
 import { createAuth } from './auth.mjs';
+import { observeMetrics } from './metrics.mjs';
 
 export function loadConfig(settings, mode = 'hot') {
   const api = settings.API ?? 'holds';
@@ -23,6 +24,7 @@ export function loadConfig(settings, mode = 'hot') {
     seatCount: numberOption(settings.SEAT_COUNT, 'SEAT_COUNT', 100),
     eventId: numberOption(settings.EVENT_ID, 'EVENT_ID', 1),
     timeout: numberOption(settings.REQUEST_TIMEOUT_MS, 'REQUEST_TIMEOUT_MS', 15000),
+    sampleMetrics: settings.SAMPLE_METRICS === '1',
   };
 }
 
@@ -41,6 +43,7 @@ export async function runLoad(config, headers) {
   const start = performance.now();
   const warmEnd = start + config.warmup * 1000;
   const deadline = config.duration ? warmEnd + config.duration * 1000 : Infinity;
+  const metrics = config.sampleMetrics ? observeMetrics(config, headers, start, warmEnd, deadline) : null;
   await Promise.all(Array.from({ length: config.concurrency }, async () => {
     while (config.duration ? performance.now() < deadline : issued < config.requestCount) {
       const userId = issued++ % config.userCount + 1;
@@ -65,6 +68,7 @@ export async function runLoad(config, headers) {
   const counted = config.duration ? results.filter(result => result.end >= warmEnd && result.end <= deadline) : results;
   const latencies = counted.map(result => result.ms).sort((a, b) => a - b);
   const elapsed = config.duration || (performance.now() - start) / 1000;
+  const observations = metrics ? await metrics.finish() : {};
   return {
     api: config.api, mode: config.mode, concurrency: config.concurrency, at: new Date().toISOString(),
     elapsedSec: elapsed, durationSec: config.duration, warmupSec: config.warmup,
@@ -72,6 +76,7 @@ export async function runLoad(config, headers) {
     throughput: counted.length / elapsed, statusCount: statuses(counted), allStatusCount: statuses(results),
     p50: percentile(latencies, 50), p95: percentile(latencies, 95), p99: percentile(latencies, 99),
     max: latencies.at(-1) ?? null,
+    ...observations,
   };
 }
 

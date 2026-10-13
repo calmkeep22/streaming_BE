@@ -39,7 +39,7 @@ public class ReservationService {
 
     private final Duration holdDuration;
 
-    private final Timer seatLockWaitTimer;
+    private final Timer redisHoldTimer;
     private final Counter successCounter;
     private final Counter alreadyReservedCounter;
     private final Counter holdSuccessCounter;
@@ -56,8 +56,7 @@ public class ReservationService {
         this.holdDuration = holdDuration;
 
         // 좌석 선점 경쟁 단계(Redis SET NX 왕복)에 걸린 시간
-        // (loadtest/reserve-load.mjs가 이 지표를 읽으므로 이름을 유지한다)
-        this.seatLockWaitTimer = Timer.builder("reservation.seat.lock.wait")
+        this.redisHoldTimer = Timer.builder("reservation.hold.redis")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .register(meterRegistry);
         this.successCounter = Counter.builder("reservation.result")
@@ -99,7 +98,7 @@ public class ReservationService {
      * - 확인에 실패하면 내가 잡은 선점만 지운다
      */
     private HoldResponse holdWithRedis(Long eventId, Long seatId, Long userId) {
-        boolean held = seatLockWaitTimer.record(() -> redisSeatHoldService.hold(seatId, userId));
+        boolean held = redisHoldTimer.record(() -> redisSeatHoldService.hold(seatId, userId));
         if (!held) {
             alreadyReservedCounter.increment();
             throw new SeatUnavailableException("다른 사용자가 선점 중인 좌석입니다.");
