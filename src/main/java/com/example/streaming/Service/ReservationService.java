@@ -8,6 +8,7 @@ import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.SeatStatus;
 import com.example.streaming.Entity.UserEntity;
 import com.example.streaming.Exception.SeatUnavailableException;
+import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Repository.ReservationRepository;
 import com.example.streaming.Repository.SeatRepository;
 import com.example.streaming.Repository.UserRepository;
@@ -188,6 +189,16 @@ public class ReservationService {
         } catch (RuntimeException e) {
             log.warn("좌석 선점 해제 실패 seatId={}, userId={}", seatId, userId, e);
         }
+    }
+
+    @Transactional
+    public void cancel(Long reservationId, Long userId) {
+        ReservationEntity reservation = reservationRepository.findById(reservationId)
+                .orElseThrow(() -> new IllegalArgumentException("예약이 존재하지 않습니다"));
+        if (!reservation.getUser().getId().equals(userId)) {
+            throw new ForbiddenException("예약자가 아닙니다");
+        }
+        reservation.cancel();
     }
 
     // ---------- 공통 ----------
