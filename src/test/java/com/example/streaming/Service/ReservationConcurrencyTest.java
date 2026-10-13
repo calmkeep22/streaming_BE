@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -38,6 +40,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ReservationConcurrencyTest {
 
     static final int THREAD_COUNT = 1000;
+    static final int CONCURRENCY = 32;
+    final ConcurrentLinkedQueue<Throwable> unexpectedErrors = new ConcurrentLinkedQueue<>();
 
     @Autowired
     ReservationService reservationService;
@@ -88,7 +92,7 @@ class ReservationConcurrencyTest {
     }
 
     @Test
-    @DisplayName("같은 좌석을 동시에 1000명이 선점해도 1명만 성공하고, DB에는 아무것도 쓰지 않는다")
+    @DisplayName("1000개 선점 요청을 최대 32개씩 실행해도 1명만 성공하고, DB에는 아무것도 쓰지 않는다")
     void hold_concurrently() throws InterruptedException {
         AtomicInteger success = new AtomicInteger();
         AtomicInteger unavailable = new AtomicInteger();
@@ -104,12 +108,13 @@ class ReservationConcurrencyTest {
                 unavailable.incrementAndGet();
             } catch (Exception e) {
                 otherError.incrementAndGet();
+                unexpectedErrors.add(e);
             }
         });
 
         assertThat(success.get()).isEqualTo(1);
         assertThat(unavailable.get()).isEqualTo(THREAD_COUNT - 1);
-        assertThat(otherError.get()).isZero();
+        assertThat(otherError.get()).as("예상하지 못한 오류: %s", unexpectedErrors).isZero();
         assertThat(redisSeatHoldService.getHolder(seat.getId())).isEqualTo(String.valueOf(winner.get()));
         assertThat(reservationRepository.count()).isZero();
     }
@@ -140,43 +145,54 @@ class ReservationConcurrencyTest {
     }
 
     @Test
-    @DisplayName("선점→확정을 1000명이 동시에 시도해도 최종 예약은 1건이다")
+    @DisplayName("1000개 선점→확정 요청을 최대 32개씩 실행해도 최종 예약은 1건이다")
     void holdAndReserve_concurrently() throws InterruptedException {
         AtomicInteger reserved = new AtomicInteger();
+        AtomicInteger unavailable = new AtomicInteger();
 
         runConcurrently(userId -> {
             try {
                 reservationService.holdSeat(event.getId(), seat.getId(), userId);
                 reservationService.reserve(event.getId(), seat.getId(), userId);
                 reserved.incrementAndGet();
-            } catch (Exception ignored) {
+            } catch (SeatUnavailableException e) {
+                unavailable.incrementAndGet();
             }
         });
 
         assertThat(reserved.get()).isEqualTo(1);
+        assertThat(unavailable.get()).isEqualTo(THREAD_COUNT - 1);
         assertThat(reservationRepository.count()).isEqualTo(1);
     }
 
     private void runConcurrently(java.util.function.LongConsumer task) throws InterruptedException {
-        ExecutorService executor = Executors.newFixedThreadPool(32);
+        ExecutorService executor = Executors.newFixedThreadPool(CONCURRENCY);
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(THREAD_COUNT);
 
-        for (long userId : userIds) {
-            executor.submit(() -> {
-                try {
-                    start.await();
-                    task.accept(userId);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    done.countDown();
-                }
-            });
+        try {
+            for (long userId : userIds) {
+                executor.submit(() -> {
+                    try {
+                        start.await();
+                        task.accept(userId);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        unexpectedErrors.add(e);
+                    } catch (Throwable e) {
+                        unexpectedErrors.add(e);
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            start.countDown();
+            assertThat(done.await(60, TimeUnit.SECONDS)).as("동시 요청 완료 제한 시간").isTrue();
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).as("실행기 종료").isTrue();
         }
-
-        start.countDown();
-        done.await();
-        executor.shutdown();
+        assertThat(unexpectedErrors).as("예상하지 못한 오류").isEmpty();
     }
 }
