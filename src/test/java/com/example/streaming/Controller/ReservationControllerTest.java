@@ -11,10 +11,14 @@ import com.example.streaming.Entity.SeatStatus;
 import com.example.streaming.Service.CustomUserDetailService;
 import com.example.streaming.Service.EventService;
 import com.example.streaming.Service.ReservationService;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -31,8 +35,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ReservationController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, ReservationControllerTest.MetricsConfig.class})
 class ReservationControllerTest {
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class MetricsConfig {
+        @Bean
+        MeterRegistry meterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+    }
 
     @Autowired
     MockMvc mockMvc;
