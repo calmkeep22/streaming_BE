@@ -1,6 +1,7 @@
 package com.example.streaming.Controller;
 
 import com.example.streaming.Exception.SeatUnavailableException;
+import com.example.streaming.Exception.ForbiddenException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
@@ -17,6 +18,11 @@ import java.util.Map;
  */
 @RestControllerAdvice
 public class ReservationExceptionHandler {
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<Map<String, String>> handleForbidden(ForbiddenException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", e.getMessage()));
+    }
 
     // 다른 사용자가 먼저 선점/예약한 정상적인 경쟁 실패 → 409
     @ExceptionHandler(SeatUnavailableException.class)

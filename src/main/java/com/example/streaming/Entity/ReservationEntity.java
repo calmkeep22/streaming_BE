@@ -5,12 +5,14 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 @Entity
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Table(
-        // 좌석당 확정 예약은 1건. Redis 선점과 DB 확정 사이의 경쟁을 막는 최종 방어선
-        uniqueConstraints = @UniqueConstraint(name = "uk_reservation_seat", columnNames = "seat_id")
+        // 확정 예약만 좌석당 1건으로 제한하고, 취소 이력은 유지한다.
+        uniqueConstraints = @UniqueConstraint(name = "uk_reservation_active_seat", columnNames = "active_seat_id")
 )
 public class ReservationEntity {
 
@@ -29,12 +31,27 @@ public class ReservationEntity {
     @Enumerated(EnumType.STRING)
     private ReservationStatus status;
 
+    @Column(name = "active_seat_id")
+    private Long activeSeatId;
+
+    private LocalDateTime canceledAt;
+
     // 선점은 Redis에 있으므로 DB에는 바로 확정 상태로 만든다
     public static ReservationEntity reserved(UserEntity user, SeatEntity seat) {
         ReservationEntity reservation = new ReservationEntity();
         reservation.user = user;
         reservation.seat = seat;
         reservation.status = ReservationStatus.RESERVED;
+        reservation.activeSeatId = seat.getId();
         return reservation;
+    }
+
+    public void cancel() {
+        if (status == ReservationStatus.CANCELED) {
+            return;
+        }
+        status = ReservationStatus.CANCELED;
+        activeSeatId = null;
+        canceledAt = LocalDateTime.now();
     }
 }

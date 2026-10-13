@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Objects;
 
-@Controller
+@RestController
 @RequestMapping("/events")
 public class ReservationController {
 
@@ -83,4 +83,13 @@ public class ReservationController {
                 .body(response);
     }
 
+    @DeleteMapping("/reservations/{reservationId}")
+    public ResponseEntity<Void> cancel(
+            @PathVariable Long reservationId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        Long userId = Long.valueOf(Objects.requireNonNull(jwt.getSubject()));
+        reservationService.cancel(reservationId, userId);
+        return ResponseEntity.noContent().build();
+    }
 }
