@@ -1,5 +1,9 @@
 package com.example.streaming.Controller;
 
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+
 import com.example.streaming.Dto.LoginRequest;
 import com.example.streaming.Dto.LoginResponse;
 import com.example.streaming.Dto.SignupRequest;
@@ -12,6 +16,8 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/auth")
+@SecurityRequirements
+@SecurityRequirements
 public class AuthController {
 
     private final AuthService authService;
