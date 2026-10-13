@@ -68,7 +68,7 @@ export async function main() {
     ];
     for (const job of jobs) {
       const config = loadConfig({ ...settings, BASE_URL: baseUrl, MGMT_URL: mgmtUrl,
-        API: job.api, CONCURRENCY: job.concurrency, DURATION_SEC: job.duration, WARMUP_SEC: warmup,
+        API: job.api, CONCURRENCY: job.concurrency, DURATION_SEC: job.duration, WARMUP_SEC: warmup, SAMPLE_METRICS: settings.SAMPLE_METRICS ?? '1',
         EVENT_ID: 1, USER_COUNT: 1000, SEAT_COUNT: 100, REQUEST_COUNT: 1000 }, job.mode);
       console.log(`Running ${job.api}/${job.mode}, concurrency=${job.concurrency}, duration=${job.duration}s`);
       const summary = await runLoad(config, headers);
