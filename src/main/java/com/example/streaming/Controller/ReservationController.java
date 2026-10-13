@@ -10,8 +10,6 @@ import com.example.streaming.Service.EventService;
 import com.example.streaming.Service.ReservationService;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -88,7 +86,6 @@ public class ReservationController {
     }
 
     @DeleteMapping("/reservations/{reservationId}")
-    @ApiResponse(responseCode = "204", description = "예약 취소 완료", content = @Content)
     @ApiResponse(responseCode = "204", description = "예약 취소 완료", content = @Content)
     public ResponseEntity<Void> cancel(
             @PathVariable Long reservationId,
