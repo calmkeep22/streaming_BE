@@ -83,10 +83,4 @@ public class ReservationController {
                 .body(response);
     }
 
-    @DeleteMapping("/reservations/{reservationId}")
-    public ResponseEntity<DeleteResponse> delete(
-            @PathVariable Long reservationId
-    ){
-
-    }
 }

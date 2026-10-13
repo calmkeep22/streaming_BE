@@ -191,13 +191,6 @@ public class ReservationService {
         }
     }
 
-    @Transactional
-    public void cancel(Long reservationId, Long userId){
-        ReservationEntity reservation = reservationRepository.findById(reservationId)
-                .orElseThrow(()-> new IllegalArgumentException("예약이 존재하지 않습니다"));
-
-        if(!reservation.getUser())
-    }
     // ---------- 공통 ----------
 
     private void validateUser(Long userId) {
