@@ -24,7 +24,7 @@ class SwaggerConfigTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.type").value("http"))
                 .andExpect(jsonPath("$.components.securitySchemes.bearerAuth.scheme").value("bearer"))
-                .andExpect(jsonPath("$.paths['/events/reservations/{reservationId}'].delete.responses['204']").exists())
+                .andExpect(jsonPath("$.paths['/reservations/{reservationId}'].delete.responses['204']").exists())
                 .andExpect(jsonPath("$.paths['/auth/login'].post.security").isEmpty())
                 .andExpect(jsonPath("$.paths['/auth/signup'].post.security").isEmpty());
     }
