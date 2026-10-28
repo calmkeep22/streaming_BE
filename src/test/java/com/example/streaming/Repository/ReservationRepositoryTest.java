@@ -86,4 +86,20 @@ class ReservationRepositoryTest {
         assertThat(reservationRepository.count()).isEqualTo(2);
         assertThat(reservationRepository.existsBySeat_IdAndStatus(seat.getId(), ReservationStatus.RESERVED)).isFalse();
     }
+
+    @Test
+    @DisplayName("findAllByUser_Id는 해당 사용자의 예약만 취소 이력까지 반환한다")
+    void findAllByUser() {
+        UserEntity otherUser = userRepository.save(new UserEntity("user2@test.com", "password"));
+        SeatEntity otherSeat = seatRepository.save(new SeatEntity(seat.getEvent(), 2));
+        ReservationEntity canceled = reservationRepository.saveAndFlush(ReservationEntity.reserved(user, seat));
+        canceled.cancel();
+        reservationRepository.saveAndFlush(canceled);
+        reservationRepository.saveAndFlush(ReservationEntity.reserved(otherUser, seat));
+        reservationRepository.saveAndFlush(ReservationEntity.reserved(user, otherSeat));
+
+        assertThat(reservationRepository.findAllByUser_Id(user.getId()))
+                .extracting(ReservationEntity::getStatus)
+                .containsExactlyInAnyOrder(ReservationStatus.CANCELED, ReservationStatus.RESERVED);
+    }
 }

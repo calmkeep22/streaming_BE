@@ -15,17 +15,18 @@ import com.example.streaming.Repository.UserRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import jakarta.transaction.Transactional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
+import java.util.List;
 
 @Service
 public class ReservationService {
@@ -199,6 +200,14 @@ public class ReservationService {
             throw new ForbiddenException("예약자가 아닙니다");
         }
         reservation.cancel();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReservationResponse> findMyReservations(Long userId) {
+        return reservationRepository.findAllByUser_Id(userId)
+                .stream()
+                .map(ReservationResponse::from)
+                .toList();
     }
 
     // ---------- 공통 ----------
