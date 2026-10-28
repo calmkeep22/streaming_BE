@@ -1,0 +1,7 @@
+# [3] 500 → 409
+#   baseline : 예외 → Tomcat 스택트레이스 ERROR 로그 + /error 재디스패치 → 500
+#   nolog    : 500 그대로, Tomcat 스택트레이스 로그만 끔 → "로그 비용"만 분리
+#   mapped   : @RestControllerAdvice 로 409 → 로그 + /error 재디스패치 모두 제거
+baseline|hot|
+nolog|hot|--logging.level.org.apache.catalina.core.ContainerBase=OFF
+mapped|hot|--reservation.error-mapping.enabled=true

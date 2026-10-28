@@ -1,0 +1,5 @@
+# [1] H2 로 실험 도구/정합성 검증 (201 이 hot=1, spread=100 건인지)
+# H2 는 기본 LOCK_TIMEOUT 이 1초라서 hot 에서 대기자가 타임아웃(500)날 수 있다 → 10초로 늘린 variant 와 비교
+h2-default|hot|--spring.datasource.url=jdbc:h2:mem:streaming;MODE=MySQL;DB_CLOSE_DELAY=-1 --spring.datasource.username=sa --spring.datasource.password=
+h2-lock10s|hot|--spring.datasource.url=jdbc:h2:mem:streaming;MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000 --spring.datasource.username=sa --spring.datasource.password=
+h2-spread|spread|--spring.datasource.url=jdbc:h2:mem:streaming;MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000 --spring.datasource.username=sa --spring.datasource.password=

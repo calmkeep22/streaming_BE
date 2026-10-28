@@ -1,0 +1,11 @@
+# [8] 좌석 선점(HOLD): DB(FOR UPDATE + HELD INSERT) vs Redis(SET NX + TTL), 경합 높음/낮음 각각
+#   db    : 좌석 행 락을 잡은 채 유효 예약 조회 → HELD INSERT. 락 대기 중에도 커넥션을 쥔다
+#   redis : DB는 사용자/좌석/RESERVED 여부 조회만, 선점 경쟁은 Redis SET NX (DB 락·INSERT 없음)
+# 선점 API(POST .../holds)를 친다. 좌석이 차면 이후 요청은 전부 409라 사실상 "거절 경로"를 비교한다
+# 커넥션 대기·락 대기 서버 평균을 보려고 시간 고정(5초 예열 + 30초 집계)으로 돈다
+# 사전 조건: 로컬 Redis(localhost:6379) 실행 중. 앱 기동 시 이전 회차의 선점 키를 지운다(LoadTestDataInitializer)
+common|--reservation.error-mapping.enabled=true @API=holds @DURATION_SEC=30 @WARMUP_SEC=5
+db|hot|--reservation.hold-strategy=db
+db|spread|--reservation.hold-strategy=db
+redis|hot|--reservation.hold-strategy=redis
+redis|spread|--reservation.hold-strategy=redis

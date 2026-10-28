@@ -1,0 +1,3 @@
+# [2] MySQL + 비관적 락, 현재 코드 그대로 (예외 → 500)
+baseline|hot|
+baseline|spread|

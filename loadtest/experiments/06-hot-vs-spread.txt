@@ -1,0 +1,4 @@
+# [6] 경합 정도에 따른 차이: 좌석 1개에 1000명(hot) vs 좌석 100개에 10명씩(spread)
+common|--reservation.error-mapping.enabled=true
+pessimistic|hot|
+pessimistic|spread|

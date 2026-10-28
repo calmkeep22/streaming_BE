@@ -1,0 +1,6 @@
+# [7] 낙관적 락(@Version) vs 비관적 락(FOR UPDATE), 경합 높음/낮음 각각
+common|--reservation.error-mapping.enabled=true
+pessimistic|hot|--reservation.lock-strategy=pessimistic
+pessimistic|spread|--reservation.lock-strategy=pessimistic
+optimistic|hot|--reservation.lock-strategy=optimistic
+optimistic|spread|--reservation.lock-strategy=optimistic

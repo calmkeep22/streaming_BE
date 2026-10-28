@@ -1,0 +1,10 @@
+# Concurrency Sweep: 동시 요청 수를 늘려가며 처리량이 멈추고 응답 시간만 늘어나는 지점(포화 지점)을 찾는다
+# 비관적 락 + 409, 좌석 1개에 몰림 (첫 성공 뒤로는 전부 409 → 사실상 "거절 경로"의 포화 지점)
+# 요청 수 고정 대신 시간 고정: 5초 예열 후 30초 동안 집계 (서버 쪽 평균도 같은 구간으로 계산)
+common|--reservation.error-mapping.enabled=true @DURATION_SEC=30 @WARMUP_SEC=5
+c010|hot|@CONCURRENCY=10
+c025|hot|@CONCURRENCY=25
+c050|hot|@CONCURRENCY=50
+c100|hot|@CONCURRENCY=100
+c150|hot|@CONCURRENCY=150
+c200|hot|@CONCURRENCY=200

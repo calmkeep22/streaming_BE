@@ -1,0 +1,8 @@
+# [5] Fail Fast: 락을 오래 기다리지 않고 빨리 409 를 주면 응답 시간/처리량이 어떻게 바뀌는지
+#   default : InnoDB 기본 innodb_lock_wait_timeout=50s
+#   wait1s  : 세션 변수로 1초만 대기 (초과 시 MySQL 1205 → PessimisticLockingFailureException → 409)
+#   nowait  : SELECT ... FOR UPDATE NOWAIT (jakarta.persistence.lock.timeout=0)
+common|--reservation.error-mapping.enabled=true
+default|hot|
+wait1s|hot|--spring.datasource.url=${DB_BASE_URL}&sessionVariables=innodb_lock_wait_timeout=1
+nowait|hot|--spring.jpa.properties.jakarta.persistence.lock.timeout=0
