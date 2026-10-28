@@ -7,6 +7,7 @@ import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.SeatStatus;
 import com.example.streaming.Entity.UserEntity;
+import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Exception.SeatUnavailableException;
 import com.example.streaming.Repository.ReservationRepository;
 import com.example.streaming.Repository.SeatRepository;
@@ -14,17 +15,19 @@ import com.example.streaming.Repository.UserRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import jakarta.transaction.Transactional;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
+import java.util.List;
 
 @Service
 public class ReservationService {
@@ -196,8 +199,20 @@ public class ReservationService {
         ReservationEntity reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(()-> new IllegalArgumentException("예약이 존재하지 않습니다"));
 
-        if(!reservation.getUser())
+        if(!reservation.getUser().getId().equals(userId)){
+            throw new ForbiddenException("예약자가 아닙니다");
+        }
+        reservation.cancel();
     }
+
+    @Transactional(readOnly = true)
+    public List<ReservationResponse> findMyReservations(Long userId) {
+        return reservationRepository.findAllByUser_Id(userId)
+                .stream()
+                .map(ReservationResponse::from)
+                .toList();
+    }
+
     // ---------- 공통 ----------
 
     private void validateUser(Long userId) {
