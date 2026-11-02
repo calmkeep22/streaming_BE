@@ -14,6 +14,7 @@ CREATE TABLE payments (
     failure_code         VARCHAR(100) NULL,
     failure_message      VARCHAR(500) NULL,
     requested_at         DATETIME(6)  NOT NULL,
+    processing_started_at DATETIME(6) NULL,
     approved_at          DATETIME(6)  NULL,
     failed_at            DATETIME(6)  NULL,
     -- 결제 복구 작업의 재시도 횟수와 다음 시도 시각
@@ -22,7 +23,7 @@ CREATE TABLE payments (
     version              BIGINT       NOT NULL,
     PRIMARY KEY (id),
     -- 복구 작업이 오래된 PROCESSING을 찾는 쿼리용
-    INDEX idx_payment_status_requested_at (status, requested_at),
+    INDEX idx_payment_status_processing_started_at (status, processing_started_at),
     CONSTRAINT uk_payment_order_id UNIQUE (order_id),
     CONSTRAINT uk_payment_provider_key UNIQUE (provider_payment_key),
     -- 예약 하나에 성공 결제는 하나만 연결된다 (@OneToOne). NULL은 중복을 허용한다.

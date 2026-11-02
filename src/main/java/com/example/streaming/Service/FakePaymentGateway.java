@@ -1,6 +1,7 @@
 package com.example.streaming.Service;
 
 import com.example.streaming.Exception.PaymentGatewayException;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -17,6 +18,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 복구 작업을 테스트하려고 장애 상황을 일부러 만들 수 있다 (failNext... 메서드).
  */
 @Component
+@ConditionalOnProperty(name = "payment.gateway", havingValue = "fake", matchIfMissing = true)
 public class FakePaymentGateway implements PaymentGateway {
 
     // 주문번호 → 결제사 쪽 결제 기록
@@ -34,7 +36,20 @@ public class FakePaymentGateway implements PaymentGateway {
     private final AtomicReference<Runnable> beforeNextInquire = new AtomicReference<>();
 
     @Override
+    public String providerName() {
+        return "FAKE";
+    }
+
+    // 결제창 없이 승인을 만들 때 쓰는 테스트용 진입점. 결제 키를 주문번호로 만든다
     public PaymentApproval approve(String orderId, long amount) {
+        String paymentKey = "fake_" + UUID.nameUUIDFromBytes(
+                (orderId + ":" + amount).getBytes(StandardCharsets.UTF_8)
+        );
+        return approve(paymentKey, orderId, amount);
+    }
+
+    @Override
+    public PaymentApproval approve(String paymentKey, String orderId, long amount) {
         if (orderId == null || orderId.isBlank()) {
             return PaymentApproval.failure("INVALID_ORDER_ID", "주문번호가 올바르지 않습니다.");
         }
@@ -49,9 +64,6 @@ public class FakePaymentGateway implements PaymentGateway {
             return decline;
         }
 
-        String paymentKey = "fake_" + UUID.nameUUIDFromBytes(
-                (orderId + ":" + amount).getBytes(StandardCharsets.UTF_8)
-        );
         // 실제 결제사처럼 같은 주문번호는 한 번만 승인한다
         FakePayment payment = payments.computeIfAbsent(orderId, id -> new FakePayment(paymentKey));
 

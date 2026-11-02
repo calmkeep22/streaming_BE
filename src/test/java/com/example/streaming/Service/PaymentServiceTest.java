@@ -7,6 +7,7 @@ import com.example.streaming.Entity.PaymentStatus;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.UserEntity;
+import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Exception.SeatUnavailableException;
 import com.example.streaming.Repository.EventRepository;
 import com.example.streaming.Repository.PaymentRepository;
@@ -41,7 +42,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * 결제 흐름(pay)의 정상·실패 경로. 비정상 상태의 복구는 PaymentRecoveryServiceTest에서 본다.
+ * 결제 흐름(주문 생성 → 결제 확정)의 정상·실패 경로. 비정상 상태의 복구는 PaymentRecoveryServiceTest에서 본다.
  * 설정(@TestPropertySource, @MockitoBean)을 PaymentRecoveryServiceTest와 똑같이 맞춰 Spring 컨텍스트를 재사용한다.
  */
 @SpringBootTest
@@ -88,95 +89,60 @@ class PaymentServiceTest {
     @AfterEach
     void tearDown() {
         fakeGateway.reset();
+        // 결제가 예약을 참조하므로, 같은 DB를 쓰는 다른 테스트가 예약을 지울 수 있게 정리한다
+        paymentRepository.deleteAll();
     }
 
     @Test
-    @DisplayName("선점한 좌석을 결제하면 SUCCESS와 확정 예약이 생기고, 커밋 후 선점을 해제한다")
-    void paySuccess() {
+    @DisplayName("주문을 만들면 서버가 정한 주문번호와 금액을 READY로 돌려주고, 결제사는 부르지 않는다")
+    void prepare() {
         given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
 
-        PaymentResponse response = paymentService.pay(eventId, seat.getId(), user.getId(), "order-success");
+        PaymentResponse order = prepareOrder();
+
+        assertThat(order.status()).isEqualTo(PaymentStatus.READY);
+        assertThat(order.amount()).isEqualTo(50_000L);
+        // 토스 orderId 규칙: 6~64자, 영문·숫자·-·_·=
+        assertThat(order.orderId()).matches("[A-Za-z0-9_=-]{6,64}");
+        assertThat(fakeGateway.approveCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("결제를 확정하면 SUCCESS와 확정 예약이 생기고, 커밋 후 선점을 해제한다")
+    void confirmSuccess() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse order = prepareOrder();
+
+        PaymentResponse response = confirm(order);
 
         assertThat(response.status()).isEqualTo(PaymentStatus.SUCCESS);
-        assertThat(response.amount()).isEqualTo(50_000L);
         assertThat(response.reservationId()).isNotNull();
         assertThat(reservationRepository.findById(response.reservationId()).orElseThrow().getStatus())
                 .isEqualTo(ReservationStatus.RESERVED);
-        assertThat(fakeGateway.statusOf("order-success").status()).isEqualTo(InquiryStatus.APPROVED);
+        assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.APPROVED);
+        assertThat(paymentRepository.findByOrderId(order.orderId()).orElseThrow().getProviderPaymentKey())
+                .isEqualTo(keyOf(order));
         verify(redisSeatHoldService).release(seat.getId(), user.getId());
     }
 
     @Test
-    @DisplayName("같은 주문번호로 다시 요청하면 결제사를 다시 부르지 않고 기존 결과를 돌려준다 (멱등)")
-    void sameOrderIdReturnsExistingPayment() {
+    @DisplayName("같은 주문을 다시 확정하면 결제사를 다시 부르지 않고 기존 결과를 돌려준다 (멱등)")
+    void confirmTwice() {
         given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse order = prepareOrder();
 
-        PaymentResponse first = paymentService.pay(eventId, seat.getId(), user.getId(), "order-replay");
-        PaymentResponse second = paymentService.pay(eventId, seat.getId(), user.getId(), "order-replay");
+        PaymentResponse first = confirm(order);
+        PaymentResponse second = confirm(order);
 
         assertThat(second).isEqualTo(first);
         assertThat(fakeGateway.approveCount()).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("다른 사용자가 쓴 주문번호로는 결제할 수 없다")
-    void orderIdOfOtherUser() {
-        given(redisSeatHoldService.isHeldBy(anyLong(), anyLong())).willReturn(true);
-        paymentService.pay(eventId, seat.getId(), user.getId(), "order-owned");
-        UserEntity otherUser = userRepository.save(new UserEntity(UUID.randomUUID() + "@test.com", "password"));
-
-        assertThatThrownBy(() -> paymentService.pay(eventId, seat.getId(), otherUser.getId(), "order-owned"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("다른 사용자가 사용 중인 주문번호입니다.");
-    }
-
-    @Test
-    @DisplayName("결제사가 거절하면 FAILED와 거절 사유를 저장하고 예약은 만들지 않는다")
-    void declinedByProvider() {
+    @DisplayName("같은 주문의 확정 요청이 동시에 와도 결제사 승인은 한 번만 나간다")
+    void concurrentConfirm() throws Exception {
         given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
-        fakeGateway.declineNext("CARD_DECLINED", "카드사에서 거절했습니다.");
-
-        PaymentResponse response = paymentService.pay(eventId, seat.getId(), user.getId(), "order-declined");
-
-        assertThat(response.status()).isEqualTo(PaymentStatus.FAILED);
-        assertThat(response.reservationId()).isNull();
-        PaymentEntity saved = paymentRepository.findByOrderId("order-declined").orElseThrow();
-        assertThat(saved.getFailureCode()).isEqualTo("CARD_DECLINED");
-        assertThat(reservationRepository.existsBySeat_IdAndStatus(seat.getId(), ReservationStatus.RESERVED)).isFalse();
-    }
-
-    @Test
-    @DisplayName("선점하지 않은 좌석은 결제를 시작하지 않는다 (결제 기록도 남지 않는다)")
-    void notHeld() {
-        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(false);
-
-        assertThatThrownBy(() -> paymentService.pay(eventId, seat.getId(), user.getId(), "order-not-held"))
-                .isInstanceOf(SeatUnavailableException.class);
-
-        assertThat(paymentRepository.findByOrderId("order-not-held")).isEmpty();
-        assertThat(fakeGateway.approveCount()).isZero();
-    }
-
-    @Test
-    @DisplayName("승인 뒤 예약 확정에 실패하면 결제사 취소로 보상하고 FAILED로 남긴다")
-    void compensateWhenReservationFails() {
-        // 준비 때는 선점이 있었지만, 결제사 승인 뒤 확정 단계에서는 선점이 만료됐다
-        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true, false);
-
-        assertThatThrownBy(() -> paymentService.pay(eventId, seat.getId(), user.getId(), "order-compensated"))
-                .isInstanceOf(SeatUnavailableException.class);
-
-        PaymentEntity saved = paymentRepository.findByOrderId("order-compensated").orElseThrow();
-        assertThat(saved.getStatus()).isEqualTo(PaymentStatus.FAILED);
-        assertThat(saved.getFailureCode()).isEqualTo("RESERVATION_FAILED");
-        assertThat(fakeGateway.statusOf("order-compensated").status()).isEqualTo(InquiryStatus.CANCELED);
-        verify(redisSeatHoldService, never()).release(anyLong(), anyLong());
-    }
-
-    @Test
-    @DisplayName("같은 주문번호로 동시에 요청해도 결제는 하나만 생기고 결제사 승인도 한 번만 나간다")
-    void concurrentSameOrderId() throws Exception {
-        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse order = prepareOrder();
         int threads = 2;
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(threads);
@@ -186,7 +152,7 @@ class PaymentServiceTest {
             for (int i = 0; i < threads; i++) {
                 futures.add(executor.submit(() -> {
                     start.await();
-                    return paymentService.pay(eventId, seat.getId(), user.getId(), "order-concurrent");
+                    return confirm(order);
                 }));
             }
             start.countDown();
@@ -197,12 +163,108 @@ class PaymentServiceTest {
             }
 
             // 늦은 쪽은 먼저 온 요청의 결제를 그대로 돌려받는다 (그 시점 상태는 PROCESSING일 수도, SUCCESS일 수도 있다)
-            assertThat(responses).extracting(PaymentResponse::paymentId).containsOnly(responses.get(0).paymentId());
+            assertThat(responses).extracting(PaymentResponse::paymentId).containsOnly(order.paymentId());
             assertThat(fakeGateway.approveCount()).isEqualTo(1);
-            assertThat(paymentRepository.findByOrderId("order-concurrent").orElseThrow().getStatus())
+            assertThat(paymentRepository.findByOrderId(order.orderId()).orElseThrow().getStatus())
                     .isEqualTo(PaymentStatus.SUCCESS);
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    @DisplayName("클라이언트가 보낸 금액이 주문 금액과 다르면 결제사를 부르지 않는다 (위변조 방지)")
+    void amountMismatch() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse order = prepareOrder();
+
+        assertThatThrownBy(() -> paymentService.confirm(user.getId(), order.orderId(), keyOf(order), 100L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("결제 금액이 주문과 일치하지 않습니다.");
+
+        assertThat(fakeGateway.approveCount()).isZero();
+        assertThat(paymentRepository.findByOrderId(order.orderId()).orElseThrow().getStatus())
+                .isEqualTo(PaymentStatus.READY);
+    }
+
+    @Test
+    @DisplayName("다른 사용자의 주문은 확정할 수 없다")
+    void confirmOrderOfOtherUser() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse order = prepareOrder();
+        UserEntity otherUser = userRepository.save(new UserEntity(UUID.randomUUID() + "@test.com", "password"));
+
+        assertThatThrownBy(() -> paymentService.confirm(otherUser.getId(), order.orderId(), keyOf(order), order.amount()))
+                .isInstanceOf(ForbiddenException.class);
+
+        assertThat(fakeGateway.approveCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("결제사가 거절하면 FAILED와 거절 사유를 저장하고 예약은 만들지 않는다")
+    void declinedByProvider() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse order = prepareOrder();
+        fakeGateway.declineNext("CARD_DECLINED", "카드사에서 거절했습니다.");
+
+        PaymentResponse response = confirm(order);
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(response.reservationId()).isNull();
+        PaymentEntity saved = paymentRepository.findByOrderId(order.orderId()).orElseThrow();
+        assertThat(saved.getFailureCode()).isEqualTo("CARD_DECLINED");
+        assertThat(reservationRepository.existsBySeat_IdAndStatus(seat.getId(), ReservationStatus.RESERVED)).isFalse();
+    }
+
+    @Test
+    @DisplayName("선점하지 않은 좌석은 주문을 만들 수 없다")
+    void prepareNotHeld() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(false);
+
+        assertThatThrownBy(this::prepareOrder).isInstanceOf(SeatUnavailableException.class);
+
+        assertThat(paymentRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("결제창에 있는 동안 선점이 만료되면 승인을 요청하지 않아 돈이 빠지지 않는다")
+    void holdExpiredBeforeConfirm() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true, false);
+        PaymentResponse order = prepareOrder();
+
+        assertThatThrownBy(() -> confirm(order)).isInstanceOf(SeatUnavailableException.class);
+
+        assertThat(fakeGateway.approveCount()).isZero();
+        assertThat(paymentRepository.findByOrderId(order.orderId()).orElseThrow().getStatus())
+                .isEqualTo(PaymentStatus.READY);
+    }
+
+    @Test
+    @DisplayName("승인 뒤 예약 확정에 실패하면 결제사 취소로 보상하고 FAILED로 남긴다")
+    void compensateWhenReservationFails() {
+        // 주문 생성과 확정 시작 때는 선점이 있었지만, 결제사 승인 뒤에는 선점이 만료됐다
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true, true, false);
+        PaymentResponse order = prepareOrder();
+
+        assertThatThrownBy(() -> confirm(order)).isInstanceOf(SeatUnavailableException.class);
+
+        PaymentEntity saved = paymentRepository.findByOrderId(order.orderId()).orElseThrow();
+        assertThat(saved.getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(saved.getFailureCode()).isEqualTo("RESERVATION_FAILED");
+        assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.CANCELED);
+        verify(redisSeatHoldService, never()).release(anyLong(), anyLong());
+    }
+
+    private PaymentResponse prepareOrder() {
+        return paymentService.prepare(eventId, seat.getId(), user.getId());
+    }
+
+    private PaymentResponse confirm(PaymentResponse order) {
+        return paymentService.confirm(user.getId(), order.orderId(), keyOf(order), order.amount());
+    }
+
+    // 실제로는 결제사가 결제창 인증 후 넘겨주는 값
+    private String keyOf(PaymentResponse order) {
+        return "key_" + order.orderId();
     }
 }

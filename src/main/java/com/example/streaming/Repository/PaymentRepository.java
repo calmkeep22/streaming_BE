@@ -28,7 +28,7 @@ public interface PaymentRepository extends JpaRepository<PaymentEntity, Long> {
      */
     @Query("""
             select p.id from PaymentEntity p
-            where ((p.status = :processing and p.requestedAt < :staleBefore) or p.status = :refundPending)
+            where ((p.status = :processing and p.processingStartedAt < :staleBefore) or p.status = :refundPending)
               and (p.nextRecoveryAt is null or p.nextRecoveryAt <= :now)
             order by p.id
             """)

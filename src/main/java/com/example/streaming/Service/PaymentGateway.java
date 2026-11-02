@@ -11,7 +11,14 @@ package com.example.streaming.Service;
  */
 public interface PaymentGateway {
 
-    PaymentApproval approve(String orderId, long amount);
+    // 결제 기록에 남길 결제사 이름
+    String providerName();
+
+    /**
+     * 사용자가 결제창에서 인증을 마친 결제를 승인한다.
+     * paymentKey는 결제사가 인증 후 클라이언트를 통해 넘겨준 값이다.
+     */
+    PaymentApproval approve(String paymentKey, String orderId, long amount);
 
     void cancel(String providerPaymentKey, String reason);
 

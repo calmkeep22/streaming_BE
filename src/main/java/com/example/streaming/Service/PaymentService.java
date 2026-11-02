@@ -7,6 +7,7 @@ import com.example.streaming.Entity.ReservationEntity;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.UserEntity;
+import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Exception.PaymentGatewayException;
 import com.example.streaming.Exception.SeatUnavailableException;
 import com.example.streaming.Repository.PaymentRepository;
@@ -16,19 +17,19 @@ import com.example.streaming.Repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Objects;
+import java.util.UUID;
 
 @Service
 public class PaymentService {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
-    private static final String PAYMENT_PROVIDER = "FAKE";
 
     private final PaymentRepository paymentRepository;
     private final ReservationRepository reservationRepository;
@@ -59,16 +60,56 @@ public class PaymentService {
         this.ticketPrice = ticketPrice;
     }
 
-    public PaymentResponse pay(Long eventId, Long seatId, Long userId, String orderId) {
-        validateRequest(eventId, seatId, userId, orderId);
+    /**
+     * 1단계: 주문 생성.
+     * 주문번호와 금액을 서버가 정해서 돌려주고, 클라이언트는 이 값으로 결제창을 띄운다.
+     * 아직 돈이 움직이지 않으므로 결제창을 닫아도 READY로 남을 뿐이다.
+     */
+    public PaymentResponse prepare(Long eventId, Long seatId, Long userId) {
+        return Objects.requireNonNull(transactionTemplate.execute(
+                status -> createOrder(eventId, seatId, userId)
+        ));
+    }
 
+    private PaymentResponse createOrder(Long eventId, Long seatId, Long userId) {
+        UserEntity user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("사용자가 존재하지 않습니다."));
+        SeatEntity seat = seatRepository.findById(seatId)
+                .orElseThrow(() -> new IllegalArgumentException("좌석이 존재하지 않습니다."));
+
+        if (!seat.getEvent().getId().equals(eventId)) {
+            throw new IllegalArgumentException("해당 이벤트의 좌석이 아닙니다.");
+        }
+        validateSeatStillHeld(seatId, userId);
+
+        PaymentEntity payment = PaymentEntity.ready(
+                generateOrderId(),
+                user,
+                seat,
+                ticketPrice,
+                paymentGateway.providerName()
+        );
+        return PaymentResponse.from(paymentRepository.save(payment));
+    }
+
+    // 토스 orderId 규칙: 6~64자, 영문 대소문자·숫자·-·_·=
+    private String generateOrderId() {
+        return "order_" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    /**
+     * 2단계: 결제 확정.
+     * 사용자가 결제창에서 인증을 마치면 클라이언트가 paymentKey를 보내고, 서버가 결제사 승인을 요청한다.
+     */
+    public PaymentResponse confirm(Long userId, String orderId, String paymentKey, long amount) {
         PaymentStart start;
         try {
             start = Objects.requireNonNull(transactionTemplate.execute(
-                    status -> preparePayment(eventId, seatId, userId, orderId)
+                    status -> startConfirm(userId, orderId, amount)
             ));
-        } catch (DataIntegrityViolationException e) {
-            return findConcurrentPayment(orderId, seatId, userId, e);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            // 같은 주문의 확정 요청이 동시에 왔다 (결제 완료 페이지 새로고침 등). 먼저 온 요청만 결제사로 간다
+            return findResponse(orderId);
         }
 
         if (start.existingResponse() != null) {
@@ -77,12 +118,12 @@ public class PaymentService {
 
         PaymentGateway.PaymentApproval approval;
         try {
-            approval = paymentGateway.approve(orderId, start.amount());
+            approval = paymentGateway.approve(paymentKey, orderId, amount);
         } catch (PaymentGatewayException e) {
             // 승인됐는지 모른다. FAILED로 바꾸면 실제로 빠져나간 돈을 놓칠 수 있으므로 PROCESSING으로 두고,
             // 결과는 복구 작업(PaymentRecoveryService)이 결제사에 조회해서 정리한다
             log.warn("결제사 승인 결과 불명, 복구 작업에 맡김 paymentId={}, orderId={}", start.paymentId(), orderId, e);
-            return findResponse(start.paymentId());
+            return findResponse(orderId);
         }
 
         if (!approval.successful()) {
@@ -103,44 +144,34 @@ public class PaymentService {
         }
     }
 
-    private PaymentStart preparePayment(
-            Long eventId,
-            Long seatId,
-            Long userId,
-            String orderId
-    ) {
-        PaymentEntity existing = paymentRepository.findByOrderId(orderId).orElse(null);
-        if (existing != null) {
-            validateExistingPayment(existing, seatId, userId);
-            return PaymentStart.existing(PaymentResponse.from(existing));
+    private PaymentStart startConfirm(Long userId, String orderId, long amount) {
+        PaymentEntity payment = paymentRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("주문이 존재하지 않습니다."));
+
+        if (!payment.getUser().getId().equals(userId)) {
+            throw new ForbiddenException("주문자가 아닙니다.");
+        }
+        // 클라이언트를 거쳐 온 금액은 위변조될 수 있으므로, 서버에 저장한 금액과 같을 때만 승인한다
+        if (payment.getAmount() != amount) {
+            throw new IllegalArgumentException("결제 금액이 주문과 일치하지 않습니다.");
+        }
+        // 이미 진행했거나 끝난 주문은 결제사를 다시 부르지 않고 현재 결과를 돌려준다 (멱등)
+        if (payment.getStatus() != PaymentStatus.READY) {
+            return PaymentStart.existing(PaymentResponse.from(payment));
         }
 
-        UserEntity user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("사용자가 존재하지 않습니다."));
-        SeatEntity seat = seatRepository.findById(seatId)
-                .orElseThrow(() -> new IllegalArgumentException("좌석이 존재하지 않습니다."));
+        validateSeatStillHeld(payment.getSeat().getId(), userId);
+        payment.startProcessing();
+        return PaymentStart.started(payment.getId());
+    }
 
-        if (!seat.getEvent().getId().equals(eventId)) {
-            throw new IllegalArgumentException("해당 이벤트의 좌석이 아닙니다.");
-        }
+    private void validateSeatStillHeld(Long seatId, Long userId) {
         if (!redisSeatHoldService.isHeldBy(seatId, userId)) {
             throw new SeatUnavailableException("선점 중인 좌석이 아니거나 선점 시간이 만료되었습니다.");
         }
         if (reservationRepository.existsBySeat_IdAndStatus(seatId, ReservationStatus.RESERVED)) {
             throw new SeatUnavailableException("이미 예약된 좌석입니다.");
         }
-
-        PaymentEntity payment = PaymentEntity.ready(
-                orderId,
-                user,
-                seat,
-                ticketPrice,
-                PAYMENT_PROVIDER
-        );
-        paymentRepository.saveAndFlush(payment);
-        payment.startProcessing();
-
-        return PaymentStart.created(payment.getId(), payment.getAmount());
     }
 
     private PaymentResponse completePayment(Long paymentId, String providerPaymentKey) {
@@ -223,44 +254,11 @@ public class PaymentService {
         }
     }
 
-    private PaymentResponse findResponse(Long paymentId) {
+    private PaymentResponse findResponse(String orderId) {
         return Objects.requireNonNull(transactionTemplate.execute(status ->
-                paymentRepository.findById(paymentId)
+                paymentRepository.findByOrderId(orderId)
                         .map(PaymentResponse::from)
-                        .orElseThrow(() -> new IllegalArgumentException("결제 요청이 존재하지 않습니다."))));
-    }
-
-    private PaymentResponse findConcurrentPayment(
-            String orderId,
-            Long seatId,
-            Long userId,
-            DataIntegrityViolationException originalException
-    ) {
-        PaymentEntity existing = paymentRepository.findByOrderId(orderId)
-                .orElseThrow(() -> originalException);
-        validateExistingPayment(existing, seatId, userId);
-        return PaymentResponse.from(existing);
-    }
-
-    private void validateExistingPayment(PaymentEntity payment, Long seatId, Long userId) {
-        if (!payment.getUser().getId().equals(userId)) {
-            throw new IllegalArgumentException("다른 사용자가 사용 중인 주문번호입니다.");
-        }
-        if (!payment.getSeat().getId().equals(seatId)) {
-            throw new IllegalArgumentException("주문번호의 좌석 정보가 일치하지 않습니다.");
-        }
-    }
-
-    private void validateRequest(Long eventId, Long seatId, Long userId, String orderId) {
-        if (eventId == null || seatId == null || userId == null) {
-            throw new IllegalArgumentException("이벤트, 좌석, 사용자 정보는 필수입니다.");
-        }
-        if (orderId == null || orderId.isBlank()) {
-            throw new IllegalArgumentException("주문번호는 필수입니다.");
-        }
-        if (orderId.length() > 100) {
-            throw new IllegalArgumentException("주문번호는 100자 이하여야 합니다.");
-        }
+                        .orElseThrow(() -> new IllegalArgumentException("주문이 존재하지 않습니다."))));
     }
 
     private void releaseHoldAfterCommit(Long seatId, Long userId) {
@@ -276,13 +274,13 @@ public class PaymentService {
         });
     }
 
-    private record PaymentStart(Long paymentId, long amount, PaymentResponse existingResponse) {
-        private static PaymentStart created(Long paymentId, long amount) {
-            return new PaymentStart(paymentId, amount, null);
+    private record PaymentStart(Long paymentId, PaymentResponse existingResponse) {
+        private static PaymentStart started(Long paymentId) {
+            return new PaymentStart(paymentId, null);
         }
 
         private static PaymentStart existing(PaymentResponse response) {
-            return new PaymentStart(null, 0L, response);
+            return new PaymentStart(null, response);
         }
     }
 }
