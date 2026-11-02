@@ -21,6 +21,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -64,6 +65,8 @@ class PaymentRecoveryServiceTest {
     UserRepository userRepository;
     @Autowired
     TransactionTemplate transactionTemplate;
+    @Autowired
+    JdbcTemplate jdbcTemplate;
 
     // 결제 흐름(pay)은 Redis 선점을 확인하므로, 테스트에서 선점 결과를 정할 수 있게 바꿔 둔다
     @MockitoBean
@@ -88,6 +91,8 @@ class PaymentRecoveryServiceTest {
     @AfterEach
     void tearDown() {
         fakeGateway.reset();
+        // 결제가 예약을 참조하므로, 같은 DB를 쓰는 다른 테스트가 예약을 지울 수 있게 정리한다
+        paymentRepository.deleteAll();
     }
 
     // ---------- 판단 표 ----------
@@ -140,6 +145,19 @@ class PaymentRecoveryServiceTest {
         PaymentEntity payment = saveProcessing("order-young");
 
         int processed = recoveryService.recoverDue(LocalDateTime.now().plusMinutes(5));
+
+        assertThat(processed).isZero();
+        assertThat(reload(payment).getStatus()).isEqualTo(PaymentStatus.PROCESSING);
+    }
+
+    @Test
+    @DisplayName("주문을 오래전에 만들었어도 승인을 방금 시작했으면 건드리지 않는다 (결제창에 오래 머문 경우)")
+    void gracePeriodStartsWhenProcessingStarts() {
+        PaymentEntity payment = saveProcessing("order-slow-window");
+        LocalDateTime longAgo = LocalDateTime.now().minusMinutes(30);
+        jdbcTemplate.update("update payments set requested_at = ? where id = ?", longAgo, payment.getId());
+
+        int processed = recoveryService.recoverDue(LocalDateTime.now());
 
         assertThat(processed).isZero();
         assertThat(reload(payment).getStatus()).isEqualTo(PaymentStatus.PROCESSING);
@@ -221,39 +239,41 @@ class PaymentRecoveryServiceTest {
     @DisplayName("승인 응답이 유실되면 pay는 PROCESSING을 돌려주고, 복구 작업이 나중에 환불한다")
     void lostApproveResponseIsRecovered() {
         given(redisSeatHoldService.isHeldBy(anyLong(), anyLong())).willReturn(true);
+        PaymentResponse order = paymentService.prepare(seat.getEvent().getId(), seat.getId(), user.getId());
         fakeGateway.loseNextApproveResponse();
 
-        PaymentResponse response = paymentService.pay(seat.getEvent().getId(), seat.getId(), user.getId(), "order-lost");
+        PaymentResponse response = paymentService.confirm(user.getId(), order.orderId(), "key-lost", order.amount());
 
         assertThat(response.status()).isEqualTo(PaymentStatus.PROCESSING);
         // 결제사 쪽에서는 실제로 승인됐다
-        assertThat(fakeGateway.statusOf("order-lost").status()).isEqualTo(InquiryStatus.APPROVED);
+        assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.APPROVED);
 
         recoveryService.recoverDue(later);
 
-        assertThat(paymentRepository.findByOrderId("order-lost").orElseThrow().getStatus()).isEqualTo(PaymentStatus.FAILED);
-        assertThat(fakeGateway.statusOf("order-lost").status()).isEqualTo(InquiryStatus.CANCELED);
+        assertThat(paymentRepository.findByOrderId(order.orderId()).orElseThrow().getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.CANCELED);
     }
 
     @Test
     @DisplayName("예약 확정과 보상 취소가 모두 실패하면 REFUND_PENDING으로 남고, 복구 작업이 유예 없이 환불한다")
     void failedCompensationBecomesRefundPending() {
-        // 결제 준비 때는 선점이 있었는데, 결제사 승인 뒤 확정 단계에서는 선점이 만료됐다
-        given(redisSeatHoldService.isHeldBy(anyLong(), anyLong())).willReturn(true, false);
+        // 주문 생성과 확정 시작 때는 선점이 있었는데, 결제사 승인 뒤에는 선점이 만료됐다
+        given(redisSeatHoldService.isHeldBy(anyLong(), anyLong())).willReturn(true, true, false);
         fakeGateway.failNextCancels(1);
+        PaymentResponse order = paymentService.prepare(seat.getEvent().getId(), seat.getId(), user.getId());
 
-        assertThatThrownBy(() -> paymentService.pay(seat.getEvent().getId(), seat.getId(), user.getId(), "order-compensate"))
+        assertThatThrownBy(() -> paymentService.confirm(user.getId(), order.orderId(), "key-compensate", order.amount()))
                 .isInstanceOf(SeatUnavailableException.class);
 
-        PaymentEntity pending = paymentRepository.findByOrderId("order-compensate").orElseThrow();
+        PaymentEntity pending = paymentRepository.findByOrderId(order.orderId()).orElseThrow();
         assertThat(pending.getStatus()).isEqualTo(PaymentStatus.REFUND_PENDING);
-        assertThat(fakeGateway.statusOf("order-compensate").status()).isEqualTo(InquiryStatus.APPROVED);
+        assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.APPROVED);
 
         // REFUND_PENDING은 환불이 필요하다는 게 확실하므로 유예 시간을 기다리지 않는다
         recoveryService.recoverDue(LocalDateTime.now());
 
         assertThat(reload(pending).getStatus()).isEqualTo(PaymentStatus.FAILED);
-        assertThat(fakeGateway.statusOf("order-compensate").status()).isEqualTo(InquiryStatus.CANCELED);
+        assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.CANCELED);
     }
 
     // ---------- 준비 ----------

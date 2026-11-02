@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>결제 연동 테스트</title>
+    <script src="https://js.tosspayments.com/v2/standard"></script>
+    <style>
+        body { max-width: 480px; margin: 40px auto; padding: 0 16px; font-family: system-ui, sans-serif; line-height: 1.5; }
+        label { display: block; margin-top: 12px; font-size: 14px; }
+        input { width: 100%; box-sizing: border-box; padding: 8px; font-size: 16px; }
+        button { margin-top: 16px; width: 100%; padding: 10px; font-size: 16px; cursor: pointer; }
+        pre { padding: 12px; background: #f4f4f4; white-space: pre-wrap; word-break: break-all; }
+    </style>
+</head>
+<body>
+<h1>결제 연동 테스트</h1>
+<p>개발용 페이지입니다. 테스트 키에서는 실제로 출금되지 않습니다.</p>
+
+<label>이메일 <input id="email" type="email" autocomplete="off"></label>
+<label>비밀번호 <input id="password" type="password" autocomplete="off"></label>
+<label>이벤트 ID <input id="eventId" type="number" value="1"></label>
+<label>좌석 ID <input id="seatId" type="number" value="1"></label>
+<button id="pay">좌석 선점 후 결제하기</button>
+
+<h2>결과</h2>
+<pre id="result">대기 중</pre>
+
+<script>
+    const TOKEN_KEY = "payment-test-token";
+    const result = document.getElementById("result");
+    const show = (value) => {
+        result.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    };
+
+    // 결제창으로 이동했다가 돌아오는 동안 로그인 토큰을 유지한다
+    const saveToken = (token) => {
+        try { sessionStorage.setItem(TOKEN_KEY, token); } catch (e) { /* 저장을 못 하면 확정 단계에서 안내한다 */ }
+    };
+    const loadToken = () => {
+        try { return sessionStorage.getItem(TOKEN_KEY); } catch (e) { return null; }
+    };
+
+    async function api(path, { token, body } = {}) {
+        const response = await fetch(path, {
+            method: body === undefined ? "GET" : "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const text = await response.text();
+        let data = text;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { /* JSON이 아니면 문자열 그대로 보여 준다 */ }
+        if (!response.ok) {
+            throw new Error(`${response.status} ${typeof data === "string" ? data : JSON.stringify(data)}`);
+        }
+        return data;
+    }
+
+    async function startPayment() {
+        const eventId = document.getElementById("eventId").value;
+        const seatId = document.getElementById("seatId").value;
+
+        show("로그인 중");
+        const { accessToken } = await api("/auth/login", {
+            body: {
+                email: document.getElementById("email").value,
+                password: document.getElementById("password").value,
+            },
+        });
+        saveToken(accessToken);
+
+        show("좌석 선점 중");
+        await api(`/events/${eventId}/seats/${seatId}/holds`, { token: accessToken, body: {} });
+
+        show("주문 생성 중");
+        const order = await api(`/events/${eventId}/seats/${seatId}/payments`, { token: accessToken, body: {} });
+        const config = await api("/payments/client-config", { token: accessToken });
+        if (!config.clientKey) {
+            throw new Error("클라이언트 키가 없습니다. PAYMENT_GATEWAY=toss로 서버를 실행했는지 확인하세요.");
+        }
+
+        show("결제창으로 이동합니다");
+        const payment = TossPayments(config.clientKey).payment({ customerKey: config.customerKey });
+        const returnUrl = window.location.origin + window.location.pathname;
+        await payment.requestPayment({
+            method: "CARD",
+            amount: { value: order.amount, currency: order.currency },
+            orderId: order.orderId,
+            orderName: `좌석 ${seatId}번 티켓`,
+            successUrl: returnUrl,
+            failUrl: returnUrl,
+        });
+    }
+
+    // 결제창에서 돌아오면 쿼리 파라미터로 결과가 온다. 성공은 paymentKey, 실패는 code와 message
+    async function handleReturn() {
+        const params = new URLSearchParams(window.location.search);
+        const paymentKey = params.get("paymentKey");
+
+        if (paymentKey) {
+            const token = loadToken();
+            if (!token) {
+                throw new Error("로그인 토큰이 없습니다. 처음부터 다시 시도하세요.");
+            }
+            show("결제 승인 중");
+            const confirmed = await api("/payments/confirm", {
+                token,
+                body: {
+                    paymentKey,
+                    orderId: params.get("orderId"),
+                    amount: Number(params.get("amount")),
+                },
+            });
+            show(confirmed);
+        } else if (params.get("code")) {
+            show({ 실패: params.get("code"), 메시지: params.get("message") });
+        }
+
+        // 새로고침해도 승인 요청이 다시 나가지 않게 주소에서 결과값을 지운다
+        if (window.location.search) {
+            history.replaceState(null, "", window.location.pathname);
+        }
+    }
+
+    // 파일로 직접 열면 /auth/login 같은 상대 주소를 호출할 수 없다
+    const servedByApp = window.location.protocol.startsWith("http");
+
+    document.getElementById("pay").addEventListener("click", () => {
+        if (!servedByApp) {
+            show("서버를 띄운 뒤 http://localhost:8080/payment-test.html 로 여세요.");
+            return;
+        }
+        startPayment().catch((error) => show(error.message));
+    });
+    if (servedByApp) {
+        handleReturn().catch((error) => show(error.message));
+    }
+</script>
+</body>
+</html>

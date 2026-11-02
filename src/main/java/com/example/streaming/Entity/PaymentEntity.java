@@ -32,7 +32,7 @@ import java.time.LocalDateTime;
                 @UniqueConstraint(name = "uk_payment_provider_key", columnNames = "provider_payment_key")
         },
         // 복구 작업이 "오래된 PROCESSING"을 찾는 쿼리용. 결제 테이블이 커져도 전체를 훑지 않게 한다
-        indexes = @Index(name = "idx_payment_status_requested_at", columnList = "status, requested_at")
+        indexes = @Index(name = "idx_payment_status_processing_started_at", columnList = "status, processing_started_at")
 )
 public class PaymentEntity {
 
@@ -82,6 +82,11 @@ public class PaymentEntity {
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime requestedAt;
+
+    // 승인 처리를 시작한 시각. 주문 생성(requestedAt) 후 결제창에 머문 시간이 길 수 있어서,
+    // 복구 작업의 유예 시간은 이 시각을 기준으로 잰다
+    @Column(name = "processing_started_at")
+    private LocalDateTime processingStartedAt;
 
     private LocalDateTime approvedAt;
 
@@ -139,6 +144,7 @@ public class PaymentEntity {
             throw new IllegalStateException("결제를 시작할 수 없는 상태입니다.");
         }
         status = PaymentStatus.PROCESSING;
+        processingStartedAt = LocalDateTime.now();
     }
 
     public void succeed(String providerPaymentKey, ReservationEntity reservation) {
