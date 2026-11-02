@@ -58,19 +58,4 @@ public class EventController {
                 .body(response);
     }
 
-    // 2단계: 선점한 좌석 예약 확정
-    @PostMapping("/{eventId}/seats/{seatId}/reservations")
-    public ResponseEntity<ReservationResponse> reserve(
-            @PathVariable Long eventId,
-            @PathVariable Long seatId,
-            @AuthenticationPrincipal Jwt jwt
-    ) {
-        Long userId = Long.valueOf(Objects.requireNonNull(jwt.getSubject()));
-        ReservationResponse response =
-                reservationService.reserve(eventId, seatId, userId);
-
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(response);
-    }
 }

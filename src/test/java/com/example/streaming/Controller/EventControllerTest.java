@@ -4,9 +4,7 @@ import com.example.streaming.Config.SecurityConfig;
 import com.example.streaming.Dto.EventCreateRequest;
 import com.example.streaming.Dto.EventResponse;
 import com.example.streaming.Dto.HoldResponse;
-import com.example.streaming.Dto.ReservationResponse;
 import com.example.streaming.Dto.SeatResponse;
-import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatStatus;
 import com.example.streaming.Service.CustomUserDetailService;
 import com.example.streaming.Service.EventService;
@@ -101,24 +99,4 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.remainingSeconds").value(300));
     }
 
-    @Test
-    @DisplayName("예약 시 201과 예약 정보를 반환한다")
-    void reserve() throws Exception {
-        given(reservationService.reserve(1L, 100L, 7L))
-                .willReturn(new ReservationResponse(999L, 7L, 100L, ReservationStatus.RESERVED));
-
-        mockMvc.perform(post("/events/{eventId}/seats/{seatId}/reservations", 1L, 100L)
-                        .with(jwt().jwt(token -> token.subject("7"))))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.reservationId").value(999))
-                .andExpect(jsonPath("$.userId").value(7))
-                .andExpect(jsonPath("$.status").value("RESERVED"));
-    }
-
-    @Test
-    @DisplayName("토큰이 없으면 401을 반환한다")
-    void reserve_withoutToken() throws Exception {
-        mockMvc.perform(post("/events/{eventId}/seats/{seatId}/reservations", 1L, 100L))
-                .andExpect(status().isUnauthorized());
-    }
 }
