@@ -102,4 +102,22 @@ class ReservationRepositoryTest {
                 .extracting(ReservationEntity::getStatus)
                 .containsExactlyInAnyOrder(ReservationStatus.CANCELED, ReservationStatus.RESERVED);
     }
+
+    @Test
+    @DisplayName("findSeatIdsByEventIdAndStatus는 해당 이벤트에서 확정 예약이 있는 좌석 id만 반환한다")
+    void findReservedSeatIdsOfEvent() {
+        SeatEntity canceledSeat = seatRepository.save(new SeatEntity(seat.getEvent(), 2));
+        seatRepository.save(new SeatEntity(seat.getEvent(), 3));
+        EventEntity otherEvent = eventRepository.save(new EventEntity("다른 콘서트", LocalDateTime.now().plusDays(7)));
+        SeatEntity otherEventSeat = seatRepository.save(new SeatEntity(otherEvent, 1));
+
+        reservationRepository.saveAndFlush(ReservationEntity.reserved(user, seat));
+        ReservationEntity canceled = reservationRepository.saveAndFlush(ReservationEntity.reserved(user, canceledSeat));
+        canceled.cancel();
+        reservationRepository.saveAndFlush(canceled);
+        reservationRepository.saveAndFlush(ReservationEntity.reserved(user, otherEventSeat));
+
+        assertThat(reservationRepository.findSeatIdsByEventIdAndStatus(seat.getEvent().getId(), ReservationStatus.RESERVED))
+                .containsExactly(seat.getId());
+    }
 }
