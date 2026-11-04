@@ -5,6 +5,7 @@ import com.example.streaming.Entity.EventEntity;
 import com.example.streaming.Entity.PaymentEntity;
 import com.example.streaming.Entity.PaymentStatus;
 import com.example.streaming.Entity.ReservationEntity;
+import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.UserEntity;
 import com.example.streaming.Exception.SeatUnavailableException;
@@ -51,6 +52,8 @@ class PaymentRecoveryServiceTest {
     PaymentRecoveryService recoveryService;
     @Autowired
     PaymentService paymentService;
+    @Autowired
+    ReservationService reservationService;
     @Autowired
     FakePaymentGateway fakeGateway;
     @Autowired
@@ -276,7 +279,49 @@ class PaymentRecoveryServiceTest {
         assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.CANCELED);
     }
 
+    // ---------- 예약 취소 환불 ----------
+
+    @Test
+    @DisplayName("예약 취소 환불이 실패하면 예약은 취소되고 결제는 CANCEL_PENDING으로 남으며, 복구 작업이 유예 없이 환불한다")
+    void failedCancelRefundIsRecovered() {
+        given(redisSeatHoldService.isHeldBy(anyLong(), anyLong())).willReturn(true);
+        PaymentResponse paid = pay("key-cancel-recover");
+        fakeGateway.failNextCancels(1);
+
+        reservationService.cancel(paid.reservationId(), user.getId());
+
+        assertThat(reservationRepository.findById(paid.reservationId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CANCELED);
+        PaymentEntity pending = paymentRepository.findByOrderId(paid.orderId()).orElseThrow();
+        assertThat(pending.getStatus()).isEqualTo(PaymentStatus.CANCEL_PENDING);
+        assertThat(fakeGateway.statusOf(paid.orderId()).status()).isEqualTo(InquiryStatus.APPROVED);
+
+        recoveryService.recoverDue(LocalDateTime.now());
+
+        assertThat(reload(pending).getStatus()).isEqualTo(PaymentStatus.CANCELED);
+        assertThat(fakeGateway.statusOf(paid.orderId()).status()).isEqualTo(InquiryStatus.CANCELED);
+    }
+
+    @Test
+    @DisplayName("환불이 실패한 예약을 사용자가 다시 취소하면 그때 환불을 다시 시도한다")
+    void retryCancelRefundsAgain() {
+        given(redisSeatHoldService.isHeldBy(anyLong(), anyLong())).willReturn(true);
+        PaymentResponse paid = pay("key-cancel-retry");
+        fakeGateway.failNextCancels(1);
+        reservationService.cancel(paid.reservationId(), user.getId());
+
+        reservationService.cancel(paid.reservationId(), user.getId());
+
+        assertThat(paymentRepository.findByOrderId(paid.orderId()).orElseThrow().getStatus())
+                .isEqualTo(PaymentStatus.CANCELED);
+    }
+
     // ---------- 준비 ----------
+
+    private PaymentResponse pay(String paymentKey) {
+        PaymentResponse order = paymentService.prepare(seat.getEvent().getId(), seat.getId(), user.getId());
+        return paymentService.confirm(user.getId(), order.orderId(), paymentKey, order.amount());
+    }
 
     private PaymentEntity saveProcessing(String orderId) {
         PaymentEntity payment = PaymentEntity.ready(orderId, user, seat, 50_000L, "FAKE");

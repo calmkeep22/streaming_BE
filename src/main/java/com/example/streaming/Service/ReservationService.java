@@ -38,6 +38,7 @@ public class ReservationService {
     private final UserRepository userRepository;
     private final RedisSeatHoldService redisSeatHoldService;
     private final TransactionTemplate transactionTemplate;
+    private final PaymentService paymentService;
 
     private final Duration holdDuration;
 
@@ -48,13 +49,14 @@ public class ReservationService {
     private final Counter holdUnavailableCounter;
 
     public ReservationService(SeatRepository seatRepository, ReservationRepository reservationRepository, UserRepository userRepository,
-                              RedisSeatHoldService redisSeatHoldService, TransactionTemplate transactionTemplate, MeterRegistry meterRegistry,
-                              @Value("${reservation.hold-duration:PT5M}") Duration holdDuration) {
+                              RedisSeatHoldService redisSeatHoldService, TransactionTemplate transactionTemplate, PaymentService paymentService,
+                              MeterRegistry meterRegistry, @Value("${reservation.hold-duration:PT5M}") Duration holdDuration) {
         this.seatRepository = seatRepository;
         this.reservationRepository = reservationRepository;
         this.userRepository = userRepository;
         this.redisSeatHoldService = redisSeatHoldService;
         this.transactionTemplate = transactionTemplate;
+        this.paymentService = paymentService;
         this.holdDuration = holdDuration;
 
         // 좌석 선점 경쟁 단계(Redis SET NX 왕복)에 걸린 시간
@@ -192,14 +194,26 @@ public class ReservationService {
         }
     }
 
-    @Transactional
+    /**
+     * 예약 취소와 전액 환불.
+     * 예약 취소와 결제의 취소 요청(CANCEL_PENDING)을 한 트랜잭션으로 커밋한 뒤, 결제사 취소는 트랜잭션 밖에서 한다.
+     * 결제사 취소가 실패해도 예약 취소는 그대로 성공이고, 환불은 복구 작업이 재시도한다.
+     */
     public void cancel(Long reservationId, Long userId) {
+        Long paymentId = transactionTemplate.execute(status -> cancelReservation(reservationId, userId));
+        if (paymentId != null) {
+            paymentService.refundCanceledReservation(paymentId);
+        }
+    }
+
+    private Long cancelReservation(Long reservationId, Long userId) {
         ReservationEntity reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new IllegalArgumentException("예약이 존재하지 않습니다"));
         if (!reservation.getUser().getId().equals(userId)) {
             throw new ForbiddenException("예약자가 아닙니다");
         }
         reservation.cancel();
+        return paymentService.requestCancelForReservation(reservationId);
     }
 
     @Transactional(readOnly = true)

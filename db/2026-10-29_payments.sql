@@ -8,7 +8,7 @@ CREATE TABLE payments (
     reservation_id       BIGINT       NULL,
     amount               BIGINT       NOT NULL,
     currency             VARCHAR(3)   NOT NULL,
-    status               ENUM('READY', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELED', 'REFUND_PENDING', 'NEEDS_REVIEW') NOT NULL,
+    status               ENUM('READY', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELED', 'REFUND_PENDING', 'NEEDS_REVIEW', 'CANCEL_PENDING') NOT NULL,
     provider             VARCHAR(30)  NOT NULL,
     provider_payment_key VARCHAR(200) NULL,
     failure_code         VARCHAR(100) NULL,
@@ -17,6 +17,7 @@ CREATE TABLE payments (
     processing_started_at DATETIME(6) NULL,
     approved_at          DATETIME(6)  NULL,
     failed_at            DATETIME(6)  NULL,
+    canceled_at          DATETIME(6)  NULL,
     -- 결제 복구 작업의 재시도 횟수와 다음 시도 시각
     recovery_attempts    INT          NOT NULL DEFAULT 0,
     next_recovery_at     DATETIME(6)  NULL,

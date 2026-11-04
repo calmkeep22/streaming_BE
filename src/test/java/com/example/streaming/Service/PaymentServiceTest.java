@@ -57,6 +57,8 @@ class PaymentServiceTest {
     @Autowired
     PaymentService paymentService;
     @Autowired
+    ReservationService reservationService;
+    @Autowired
     FakePaymentGateway fakeGateway;
     @Autowired
     PaymentRepository paymentRepository;
@@ -283,6 +285,53 @@ class PaymentServiceTest {
         assertThat(saved.getFailureCode()).isEqualTo("RESERVATION_FAILED");
         assertThat(fakeGateway.statusOf(order.orderId()).status()).isEqualTo(InquiryStatus.CANCELED);
         verify(redisSeatHoldService, never()).release(anyLong(), anyLong());
+    }
+
+    // ---------- 예약 취소와 환불 ----------
+
+    @Test
+    @DisplayName("결제한 예약을 취소하면 결제사 취소까지 끝나 결제가 CANCELED가 되고 좌석이 풀린다")
+    void cancelReservationRefundsPayment() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse paid = confirm(prepareOrder());
+
+        reservationService.cancel(paid.reservationId(), user.getId());
+
+        PaymentEntity payment = paymentRepository.findByOrderId(paid.orderId()).orElseThrow();
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELED);
+        assertThat(payment.getCanceledAt()).isNotNull();
+        assertThat(fakeGateway.statusOf(paid.orderId()).status()).isEqualTo(InquiryStatus.CANCELED);
+        assertThat(reservationRepository.findById(paid.reservationId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CANCELED);
+        assertThat(reservationRepository.existsBySeat_IdAndStatus(seat.getId(), ReservationStatus.RESERVED)).isFalse();
+    }
+
+    @Test
+    @DisplayName("이미 환불까지 끝난 예약을 다시 취소해도 그대로다 (멱등)")
+    void cancelReservationTwice() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse paid = confirm(prepareOrder());
+        reservationService.cancel(paid.reservationId(), user.getId());
+
+        reservationService.cancel(paid.reservationId(), user.getId());
+
+        assertThat(paymentRepository.findByOrderId(paid.orderId()).orElseThrow().getStatus())
+                .isEqualTo(PaymentStatus.CANCELED);
+    }
+
+    @Test
+    @DisplayName("다른 사용자는 결제한 예약을 취소할 수 없고 결제도 그대로다")
+    void cancelReservationOfOtherUser() {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse paid = confirm(prepareOrder());
+        UserEntity otherUser = userRepository.save(new UserEntity(UUID.randomUUID() + "@test.com", "password"));
+
+        assertThatThrownBy(() -> reservationService.cancel(paid.reservationId(), otherUser.getId()))
+                .isInstanceOf(ForbiddenException.class);
+
+        assertThat(paymentRepository.findByOrderId(paid.orderId()).orElseThrow().getStatus())
+                .isEqualTo(PaymentStatus.SUCCESS);
+        assertThat(fakeGateway.statusOf(paid.orderId()).status()).isEqualTo(InquiryStatus.APPROVED);
     }
 
     private PaymentResponse prepareOrder() {
