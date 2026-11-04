@@ -18,6 +18,12 @@ import jakarta.transaction.Transactional;
 
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.IntStream;
+
 @Service
 public class EventService {
 
@@ -84,11 +90,43 @@ public class EventService {
 
         eventRepository.save(event);
 
+        List<SeatEntity> seats = IntStream.rangeClosed(1, request.seatCount())
+                .mapToObj(seatNumber -> new SeatEntity(event, seatNumber))
+                .toList();
+        seatRepository.saveAll(seats);
+
         return new EventResponse(
                 event.getId(),
                 event.getTitle(),
-                event.getStartTime()
+                event.getStartTime(),
+                seats.size()
         );
+    }
+
+    /**
+     * 이벤트의 좌석 목록과 상태. 좌석마다 조회하지 않도록 선점은 Redis MGET, 확정 예약은 쿼리 한 번으로 읽는다.
+     * 단건 조회(toSeatStatus)와 같은 이유로 Redis를 먼저 읽는다.
+     */
+    public List<SeatResponse> getSeats(Long eventId) {
+        if (!eventRepository.existsById(eventId)) {
+            throw new IllegalArgumentException("이벤트가 존재하지 않습니다.");
+        }
+
+        List<SeatEntity> seats = seatRepository.findAllByEvent_IdOrderBySeatNumber(eventId);
+        List<String> holders = redisSeatHoldService.getHolders(
+                seats.stream().map(SeatEntity::getId).toList());
+        Set<Long> reservedSeatIds = new HashSet<>(
+                reservationRepository.findSeatIdsByEventIdAndStatus(eventId, ReservationStatus.RESERVED));
+
+        List<SeatResponse> responses = new ArrayList<>(seats.size());
+        for (int i = 0; i < seats.size(); i++) {
+            SeatEntity seat = seats.get(i);
+            SeatStatus status = reservedSeatIds.contains(seat.getId())
+                    ? SeatStatus.RESERVED
+                    : holders.get(i) != null ? SeatStatus.HELD : SeatStatus.AVAILABLE;
+            responses.add(new SeatResponse(seat.getId(), seat.getSeatNumber(), status));
+        }
+        return responses;
     }
 
     public SeatResponse getSeat(Long seatId) {
