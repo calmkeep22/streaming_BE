@@ -11,6 +11,7 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -59,6 +60,20 @@ class RedisSeatHoldServiceTest {
         assertThat(holdService.getHolder(SEAT_ID)).isEqualTo("1");
         assertThat(holdService.isHeldBy(SEAT_ID, 1L)).isTrue();
         assertThat(holdService.getRemainingSeconds(SEAT_ID)).isBetween(1L, TTL.toSeconds());
+    }
+
+    @Test
+    @DisplayName("여러 좌석의 선점 사용자를 요청 순서대로 읽고, 선점이 없는 좌석은 null이다")
+    void getHolders() {
+        long otherSeatId = SEAT_ID + 1;
+        try {
+            holdService.hold(otherSeatId, 2L);
+
+            assertThat(holdService.getHolders(List.of(SEAT_ID, otherSeatId))).containsExactly(null, "2");
+            assertThat(holdService.getHolders(List.of())).isEmpty();
+        } finally {
+            redisTemplate.delete(holdService.createKey(otherSeatId));
+        }
     }
 
     @Test

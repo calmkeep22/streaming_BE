@@ -3,12 +3,14 @@ package com.example.streaming.Controller;
 import com.example.streaming.Dto.*;
 import com.example.streaming.Service.EventService;
 import com.example.streaming.Service.ReservationService;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Objects;
 
 @RestController
@@ -23,14 +25,22 @@ public class EventController {
         this.reservationService = reservationService;
     }
 
+    // 관리자만 호출할 수 있다 (SecurityConfig)
     @PostMapping
     public ResponseEntity<EventResponse> createEvent(
-            @RequestBody EventCreateRequest request
+            @Valid @RequestBody EventCreateRequest request
     ){
         EventResponse event = eventService.createEvent(request);
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(event);
+    }
+
+    @GetMapping("/{eventId}/seats")
+    public ResponseEntity<List<SeatResponse>> getSeats(
+            @PathVariable Long eventId
+    ) {
+        return ResponseEntity.ok(eventService.getSeats(eventId));
     }
 
     @GetMapping("/seats/{seatId}")
