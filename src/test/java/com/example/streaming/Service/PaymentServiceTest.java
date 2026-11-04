@@ -33,6 +33,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -169,6 +170,35 @@ class PaymentServiceTest {
                     .isEqualTo(PaymentStatus.SUCCESS);
         } finally {
             executor.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("늦게 온 같은 주문의 확정 요청이 먼저 처리된 예약을 봐도, 에러 대신 먼저 처리된 결과를 돌려준다")
+    void lateConfirmSeesFirstResult() throws Exception {
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willReturn(true);
+        PaymentResponse order = prepareOrder();
+        ExecutorService other = Executors.newSingleThreadExecutor();
+        AtomicBoolean lateRequestChecking = new AtomicBoolean(true);
+
+        // 늦은 요청이 주문을 READY로 읽고 선점을 확인하는 순간, 다른 스레드가 같은 주문을 끝까지 처리한다.
+        // 그 뒤 늦은 요청에는 선점이 풀린 것으로 보인다 (먼저 온 요청이 결제를 끝내며 선점을 해제했으므로)
+        given(redisSeatHoldService.isHeldBy(seat.getId(), user.getId())).willAnswer(invocation -> {
+            if (lateRequestChecking.compareAndSet(true, false)) {
+                other.submit(() -> confirm(order)).get(30, TimeUnit.SECONDS);
+                return false;
+            }
+            return true;
+        });
+
+        try {
+            PaymentResponse late = confirm(order);
+
+            assertThat(late.status()).isEqualTo(PaymentStatus.SUCCESS);
+            assertThat(late.paymentId()).isEqualTo(order.paymentId());
+            assertThat(fakeGateway.approveCount()).isEqualTo(1);
+        } finally {
+            other.shutdownNow();
         }
     }
 

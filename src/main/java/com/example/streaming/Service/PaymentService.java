@@ -110,6 +110,14 @@ public class PaymentService {
         } catch (ObjectOptimisticLockingFailureException e) {
             // 같은 주문의 확정 요청이 동시에 왔다 (결제 완료 페이지 새로고침 등). 먼저 온 요청만 결제사로 간다
             return findResponse(orderId);
+        } catch (SeatUnavailableException e) {
+            // 늦게 온 같은 주문의 요청은 READY를 읽은 뒤, 먼저 온 요청이 만든 예약을 보고 여기서 실패할 수 있다.
+            // 이미 그 요청이 이 주문을 처리했다면 에러 대신 그 결과를 돌려준다
+            PaymentResponse current = findResponse(orderId);
+            if (current.status() != PaymentStatus.READY) {
+                return current;
+            }
+            throw e;
         }
 
         if (start.existingResponse() != null) {
