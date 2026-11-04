@@ -19,10 +19,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -259,6 +262,56 @@ public class PaymentService {
         } catch (RuntimeException e) {
             log.error("환불 대기 상태 저장 실패, 복구 작업의 결제사 조회에 맡김 paymentId={}", paymentId, e);
             originalException.addSuppressed(e);
+        }
+    }
+
+    /**
+     * 예약 취소의 1단계. 예약 취소와 같은 트랜잭션 안에서 불러야 한다 (MANDATORY).
+     * 이 예약에 연결된 성공 결제를 CANCEL_PENDING으로 바꾸고 결제 id를 돌려준다. 결제 없이 만든 예약이면 null.
+     * 이미 CANCEL_PENDING이면(이전 환불이 실패했으면) 그대로 돌려줘서, 사용자가 다시 취소할 때 환불을 다시 시도한다.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Long requestCancelForReservation(Long reservationId) {
+        return paymentRepository.findByReservation_IdAndStatusIn(
+                        reservationId,
+                        List.of(PaymentStatus.SUCCESS, PaymentStatus.CANCEL_PENDING))
+                .map(payment -> {
+                    payment.requestCancel();
+                    return payment.getId();
+                })
+                .orElse(null);
+    }
+
+    /**
+     * 예약 취소의 2단계. 예약 취소가 커밋된 뒤 트랜잭션 밖에서 부른다.
+     * 결제사 취소에 실패해도 예외를 던지지 않는다. 예약 취소는 이미 끝났고,
+     * 결제는 CANCEL_PENDING으로 남아 복구 작업(PaymentRecoveryService)이 재시도한다.
+     */
+    public void refundCanceledReservation(Long paymentId) {
+        String providerPaymentKey = transactionTemplate.execute(status ->
+                paymentRepository.findById(paymentId)
+                        .filter(payment -> payment.getStatus() == PaymentStatus.CANCEL_PENDING)
+                        .map(PaymentEntity::getProviderPaymentKey)
+                        .orElse(null));
+        if (providerPaymentKey == null) {
+            return;
+        }
+
+        try {
+            paymentGateway.cancel(providerPaymentKey, "예약 취소에 따른 환불");
+        } catch (RuntimeException e) {
+            log.warn("예약 취소 환불 실패, 복구 작업이 재시도 paymentId={}", paymentId, e);
+            return;
+        }
+
+        try {
+            transactionTemplate.executeWithoutResult(status ->
+                    paymentRepository.findById(paymentId)
+                            .filter(payment -> payment.getStatus() == PaymentStatus.CANCEL_PENDING)
+                            .ifPresent(PaymentEntity::completeCancel));
+        } catch (ObjectOptimisticLockingFailureException e) {
+            // 그사이 복구 작업이 같은 환불을 먼저 끝냈다. 결제사 취소는 멱등이라 결과는 같다
+            log.info("예약 취소 환불을 다른 쪽이 먼저 완료 paymentId={}", paymentId);
         }
     }
 

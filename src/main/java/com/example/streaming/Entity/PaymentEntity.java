@@ -92,6 +92,9 @@ public class PaymentEntity {
 
     private LocalDateTime failedAt;
 
+    // 예약 취소에 따른 환불이 끝난 시각
+    private LocalDateTime canceledAt;
+
     // 복구 작업이 이 결제를 처리하다 실패한 횟수. 최대 횟수를 넘으면 NEEDS_REVIEW로 넘긴다
     @Column(name = "recovery_attempts", nullable = false)
     private int recoveryAttempts;
@@ -168,7 +171,10 @@ public class PaymentEntity {
     }
 
     public void fail(String failureCode, String failureMessage) {
-        if (status == PaymentStatus.SUCCESS || status == PaymentStatus.CANCELED) {
+        // 돈이 오간 기록(성공, 취소 진행 중, 취소 완료)은 실패로 덮어쓰지 않는다
+        if (status == PaymentStatus.SUCCESS
+                || status == PaymentStatus.CANCEL_PENDING
+                || status == PaymentStatus.CANCELED) {
             throw new IllegalStateException("완료된 결제는 실패 처리할 수 없습니다.");
         }
 
@@ -178,11 +184,30 @@ public class PaymentEntity {
         this.failedAt = LocalDateTime.now();
     }
 
-    public void cancel() {
+    /**
+     * 예약 취소로 성공한 결제의 환불을 요청한다. 예약 취소와 같은 트랜잭션에서 부른다.
+     * 결제사 취소는 이 상태를 커밋한 뒤에 호출하고, 실패하면 복구 작업이 재시도한다.
+     */
+    public void requestCancel() {
+        if (status == PaymentStatus.CANCEL_PENDING) {
+            return;
+        }
         if (status != PaymentStatus.SUCCESS) {
             throw new IllegalStateException("성공한 결제만 취소할 수 있습니다.");
         }
+        status = PaymentStatus.CANCEL_PENDING;
+    }
+
+    // 결제사 취소가 끝나 환불이 완료됐다
+    public void completeCancel() {
+        if (status == PaymentStatus.CANCELED) {
+            return;
+        }
+        if (status != PaymentStatus.CANCEL_PENDING) {
+            throw new IllegalStateException("취소 요청 상태가 아닙니다.");
+        }
         status = PaymentStatus.CANCELED;
+        canceledAt = LocalDateTime.now();
     }
 
     /**
@@ -224,7 +249,9 @@ public class PaymentEntity {
      * 최대 횟수에 도달하면 더 시도하지 않고 사람이 확인하도록 NEEDS_REVIEW로 바꾼다.
      */
     public void scheduleRecoveryRetry(LocalDateTime now, int maxAttempts, Duration baseBackoff) {
-        if (status != PaymentStatus.PROCESSING && status != PaymentStatus.REFUND_PENDING) {
+        if (status != PaymentStatus.PROCESSING
+                && status != PaymentStatus.REFUND_PENDING
+                && status != PaymentStatus.CANCEL_PENDING) {
             throw new IllegalStateException("복구 대상 상태가 아닙니다.");
         }
 

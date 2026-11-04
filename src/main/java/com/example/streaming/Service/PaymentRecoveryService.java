@@ -20,7 +20,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
- * 결과가 확정되지 않은 결제(PROCESSING)와 환불이 남은 결제(REFUND_PENDING)를 결제사 상태와 맞춘다.
+ * 결과가 확정되지 않은 결제(PROCESSING)와 환불이 남은 결제(REFUND_PENDING, CANCEL_PENDING)를 결제사 상태와 맞춘다.
  *
  * 우리 DB와 결제사는 한 트랜잭션으로 묶을 수 없어서, 서버가 죽거나 응답이 유실되면 둘이 어긋난다.
  * 돈에 대해서는 결제사가 진실의 원천이므로, 결제사에 실제 상태를 물어보고 우리 DB를 거기에 맞춘다.
@@ -93,7 +93,7 @@ public class PaymentRecoveryService {
     public int recoverDue(LocalDateTime now) {
         List<Long> ids = paymentRepository.findRecoveryTargetIds(
                 PaymentStatus.PROCESSING,
-                PaymentStatus.REFUND_PENDING,
+                List.of(PaymentStatus.REFUND_PENDING, PaymentStatus.CANCEL_PENDING),
                 now.minus(gracePeriod),
                 now,
                 PageRequest.of(0, batchSize)
@@ -124,9 +124,10 @@ public class PaymentRecoveryService {
 
         Result result;
         try {
-            result = snapshot.status() == PaymentStatus.REFUND_PENDING
-                    ? refund(snapshot, now)
-                    : resolveProcessing(snapshot, now);
+            // REFUND_PENDING, CANCEL_PENDING은 환불이 필요하다는 게 확실하므로 조회 없이 바로 결제사 취소를 한다
+            result = snapshot.status() == PaymentStatus.PROCESSING
+                    ? resolveProcessing(snapshot, now)
+                    : refund(snapshot, now);
         } catch (ObjectOptimisticLockingFailureException e) {
             // 우리가 읽은 뒤 다른 쪽이 상태를 바꿨다. 그쪽 결과를 존중하고 손대지 않는다
             result = Result.SKIPPED;
@@ -174,7 +175,11 @@ public class PaymentRecoveryService {
             return scheduleRetry(snapshot, now);
         }
 
-        boolean updated = updateIfStatus(snapshot, PaymentStatus.REFUND_PENDING, PaymentEntity::completeRefund);
+        // 예약을 못 만든 결제는 FAILED로, 예약을 취소한 결제는 CANCELED로 끝난다
+        Consumer<PaymentEntity> complete = snapshot.status() == PaymentStatus.CANCEL_PENDING
+                ? PaymentEntity::completeCancel
+                : PaymentEntity::completeRefund;
+        boolean updated = updateIfStatus(snapshot, snapshot.status(), complete);
         return updated ? Result.REFUNDED : Result.SKIPPED;
     }
 
@@ -231,7 +236,9 @@ public class PaymentRecoveryService {
         }
 
         boolean isRecoveryTarget() {
-            return status == PaymentStatus.PROCESSING || status == PaymentStatus.REFUND_PENDING;
+            return status == PaymentStatus.PROCESSING
+                    || status == PaymentStatus.REFUND_PENDING
+                    || status == PaymentStatus.CANCEL_PENDING;
         }
 
         Snapshot withRefundPending(String providerPaymentKey) {

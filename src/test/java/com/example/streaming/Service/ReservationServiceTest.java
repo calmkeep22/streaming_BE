@@ -53,6 +53,8 @@ class ReservationServiceTest {
     // 단위 테스트라 실제 트랜잭션은 없다. TransactionTemplate이 콜백을 그대로 실행하게만 한다
     @Mock
     PlatformTransactionManager transactionManager;
+    @Mock
+    PaymentService paymentService;
 
     static final Duration HOLD_DURATION = Duration.ofMinutes(5);
 
@@ -66,7 +68,7 @@ class ReservationServiceTest {
     void setUp() {
         reservationService = new ReservationService(
                 seatRepository, reservationRepository, userRepository, redisSeatHoldService,
-                new TransactionTemplate(transactionManager), new SimpleMeterRegistry(),
+                new TransactionTemplate(transactionManager), paymentService, new SimpleMeterRegistry(),
                 HOLD_DURATION);
 
         event = new EventEntity("콘서트", LocalDateTime.now().plusDays(7));
@@ -203,6 +205,33 @@ class ReservationServiceTest {
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.RESERVED);
         assertThat(reservation.getActiveSeatId()).isEqualTo(seat.getId());
         assertThat(reservation.getCanceledAt()).isNull();
+        verifyNoInteractions(paymentService);
+    }
+
+    @Test
+    @DisplayName("결제한 예약을 취소하면 같은 트랜잭션에서 결제 취소를 요청하고, 커밋 후 환불을 진행한다")
+    void cancel_withPayment_requestsRefund() {
+        ReservationEntity reservation = ReservationEntity.reserved(user, seat);
+        given(reservationRepository.findById(999L)).willReturn(Optional.of(reservation));
+        given(paymentService.requestCancelForReservation(999L)).willReturn(10L);
+
+        reservationService.cancel(999L, 1L);
+
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELED);
+        verify(paymentService).refundCanceledReservation(10L);
+    }
+
+    @Test
+    @DisplayName("결제 없이 만든 예약을 취소하면 환불을 진행하지 않는다")
+    void cancel_withoutPayment_skipsRefund() {
+        ReservationEntity reservation = ReservationEntity.reserved(user, seat);
+        given(reservationRepository.findById(999L)).willReturn(Optional.of(reservation));
+        given(paymentService.requestCancelForReservation(999L)).willReturn(null);
+
+        reservationService.cancel(999L, 1L);
+
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELED);
+        verify(paymentService, never()).refundCanceledReservation(any());
     }
 
     @Test

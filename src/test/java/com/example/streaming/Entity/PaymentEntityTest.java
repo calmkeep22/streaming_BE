@@ -133,6 +133,43 @@ class PaymentEntityTest {
     }
 
     @Test
+    @DisplayName("성공한 결제만 취소를 요청할 수 있고, 취소가 끝나면 CANCELED와 취소 시각을 남긴다")
+    void requestAndCompleteCancel() {
+        UserEntity user = new UserEntity("payment@test.com", "password");
+        EventEntity event = new EventEntity("콘서트", LocalDateTime.now().plusDays(1));
+        SeatEntity seat = new SeatEntity(event, 1);
+        PaymentEntity payment = PaymentEntity.ready("order-1", user, seat, 50_000L, "FAKE");
+        payment.startProcessing();
+        assertThatThrownBy(payment::requestCancel).isInstanceOf(IllegalStateException.class);
+
+        payment.succeed("provider-key-1", ReservationEntity.reserved(user, seat));
+        payment.requestCancel();
+        payment.requestCancel();
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCEL_PENDING);
+
+        payment.completeCancel();
+        payment.completeCancel();
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELED);
+        assertThat(payment.getCanceledAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("취소 요청 중인 결제는 실패로 덮어쓸 수 없다 (돈이 오간 기록)")
+    void cancelPendingCannotFail() {
+        UserEntity user = new UserEntity("payment@test.com", "password");
+        EventEntity event = new EventEntity("콘서트", LocalDateTime.now().plusDays(1));
+        SeatEntity seat = new SeatEntity(event, 1);
+        PaymentEntity payment = PaymentEntity.ready("order-1", user, seat, 50_000L, "FAKE");
+        payment.startProcessing();
+        payment.succeed("provider-key-1", ReservationEntity.reserved(user, seat));
+        payment.requestCancel();
+
+        assertThatThrownBy(() -> payment.fail("ANY", "실패"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCEL_PENDING);
+    }
+
+    @Test
     @DisplayName("0원 이하 금액으로 결제 요청을 생성할 수 없다")
     void amountMustBePositive() {
         UserEntity user = new UserEntity("payment@test.com", "password");
