@@ -6,6 +6,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -44,6 +45,16 @@ public class RedisSeatHoldService {
     // 선점한 사용자 id. 선점이 없거나 만료됐으면 null
     public String getHolder(Long seatId) {
         return redisTemplate.opsForValue().get(createKey(seatId));
+    }
+
+    // 여러 좌석의 선점 사용자 id를 MGET 한 번으로 읽는다. 결과는 seatIds 순서와 같고, 선점이 없으면 null
+    public List<String> getHolders(List<Long> seatIds) {
+        if (seatIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> holders = redisTemplate.opsForValue()
+                .multiGet(seatIds.stream().map(this::createKey).toList());
+        return holders != null ? holders : Collections.nCopies(seatIds.size(), null);
     }
 
     public boolean isHeldBy(Long seatId, Long userId) {
