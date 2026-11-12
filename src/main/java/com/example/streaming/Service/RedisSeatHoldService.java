@@ -1,6 +1,8 @@
 package com.example.streaming.Service;
 
+import com.example.streaming.Exception.RedisUnavailableException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
@@ -8,6 +10,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
  * 좌석 임시 선점(HOLD)을 Redis로 처리한다.
@@ -36,14 +39,14 @@ public class RedisSeatHoldService {
 
     // SET key value NX EX ttl → 키가 없을 때만 저장(true), 이미 있으면 false
     public boolean hold(Long seatId, Long userId) {
-        Boolean success = redisTemplate.opsForValue()
-                .setIfAbsent(createKey(seatId), userId.toString(), holdTtl);
+        Boolean success = executeRedis(() -> redisTemplate.opsForValue()
+                .setIfAbsent(createKey(seatId), userId.toString(), holdTtl));
         return Boolean.TRUE.equals(success);
     }
 
     // 선점한 사용자 id. 선점이 없거나 만료됐으면 null
     public String getHolder(Long seatId) {
-        return redisTemplate.opsForValue().get(createKey(seatId));
+        return executeRedis(() -> redisTemplate.opsForValue().get(createKey(seatId)));
     }
 
     public boolean isHeldBy(Long seatId, Long userId) {
@@ -52,7 +55,7 @@ public class RedisSeatHoldService {
 
     // 남은 선점 시간(초). 키가 없으면 -2, TTL이 없으면 -1 (Redis TTL 명령 규칙)
     public Long getRemainingSeconds(Long seatId) {
-        return redisTemplate.getExpire(createKey(seatId), TimeUnit.SECONDS);
+        return executeRedis(() -> redisTemplate.getExpire(createKey(seatId), TimeUnit.SECONDS));
     }
 
     /**
@@ -62,8 +65,20 @@ public class RedisSeatHoldService {
      * 버전과 무관하게 원자적으로 동작하는 Lua 스크립트(GET 비교 + DEL)를 쓴다.
      */
     public boolean release(Long seatId, Long userId) {
-        Long deleted = redisTemplate.execute(RELEASE_SCRIPT, List.of(createKey(seatId)), userId.toString());
+        Long deleted = executeRedis(() ->
+                redisTemplate.execute(RELEASE_SCRIPT, List.of(createKey(seatId)), userId.toString()));
         return Long.valueOf(1L).equals(deleted);
+    }
+
+    private <T> T executeRedis(Supplier<T> operation) {
+        try {
+            return operation.get();
+        } catch (DataAccessException e) {
+            throw new RedisUnavailableException(
+                    "좌석 선점 저장소를 일시적으로 사용할 수 없습니다.",
+                    e
+            );
+        }
     }
 
     public Duration getHoldTtl() {
