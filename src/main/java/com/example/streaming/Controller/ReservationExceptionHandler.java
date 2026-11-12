@@ -2,6 +2,7 @@ package com.example.streaming.Controller;
 
 import com.example.streaming.Exception.SeatUnavailableException;
 import com.example.streaming.Exception.ForbiddenException;
+import com.example.streaming.Exception.RedisUnavailableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
@@ -34,6 +35,12 @@ public class ReservationExceptionHandler {
     @ExceptionHandler(CannotCreateTransactionException.class)
     public ResponseEntity<Map<String, String>> handleBusy(CannotCreateTransactionException e) {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("message", "요청이 많아 잠시 후 다시 시도해 주세요."));
+    }
+
+    @ExceptionHandler(RedisUnavailableException.class)
+    public ResponseEntity<Map<String, String>> handleRedisUnavailable(RedisUnavailableException e) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of("message", "좌석 선점 서비스를 일시적으로 사용할 수 없습니다."));
     }
 
     // 로그인 실패(이메일 없음/비밀번호 불일치). 매핑하지 않으면 Security의 기본 EntryPoint가 403으로 바꿔버린다
