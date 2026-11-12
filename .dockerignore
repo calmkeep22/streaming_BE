@@ -1,0 +1,9 @@
+.git
+.gradle
+.idea
+.claude
+build
+out
+.env
+loadtest/results
+*.iml

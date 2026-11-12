@@ -1,0 +1,227 @@
+name: streaming-sentinel
+
+services:
+  mysql:
+    image: mysql:8.0.44
+    environment:
+      MYSQL_DATABASE: streaming
+      MYSQL_USER: streaming
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-streaming-mysql-dev}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-streaming-root-dev}
+    ports:
+      - "3307:3306"
+    volumes:
+      - sentinel-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ustreaming -p$${MYSQL_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis-primary:
+    image: redis:7.4-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        exec redis-server
+        --appendonly yes
+        --requirepass "$${REDIS_PASSWORD}"
+        --masterauth "$${REDIS_PASSWORD}"
+    ports:
+      - "6379:6379"
+    volumes:
+      - sentinel-redis-primary-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      default:
+        ipv4_address: 172.29.0.10
+
+  redis-replica:
+    image: redis:7.4-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        exec redis-server
+        --appendonly yes
+        --replicaof redis-primary 6379
+        --requirepass "$${REDIS_PASSWORD}"
+        --masterauth "$${REDIS_PASSWORD}"
+    ports:
+      - "6380:6379"
+    volumes:
+      - sentinel-redis-replica-data:/data
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      default:
+        ipv4_address: 172.29.0.11
+
+  redis-sentinel-1:
+    image: redis:7.4-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /data/sentinel.conf ]; then cat > /data/sentinel.conf <<EOF
+        port 26379
+        sentinel monitor streaming-master 172.29.0.10 6379 2
+        sentinel auth-pass streaming-master $${REDIS_PASSWORD}
+        sentinel down-after-milliseconds streaming-master 3000
+        sentinel failover-timeout streaming-master 10000
+        sentinel parallel-syncs streaming-master 1
+        requirepass $${REDIS_SENTINEL_PASSWORD}
+        EOF
+        fi
+        exec redis-server /data/sentinel.conf --sentinel
+    ports:
+      - "26379:26379"
+    volumes:
+      - sentinel-redis-sentinel-1-data:/data
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_SENTINEL_PASSWORD}\" -p 26379 ping | grep PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    restart: unless-stopped
+
+  redis-sentinel-2:
+    image: redis:7.4-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /data/sentinel.conf ]; then cat > /data/sentinel.conf <<EOF
+        port 26379
+        sentinel monitor streaming-master 172.29.0.10 6379 2
+        sentinel auth-pass streaming-master $${REDIS_PASSWORD}
+        sentinel down-after-milliseconds streaming-master 3000
+        sentinel failover-timeout streaming-master 10000
+        sentinel parallel-syncs streaming-master 1
+        requirepass $${REDIS_SENTINEL_PASSWORD}
+        EOF
+        fi
+        exec redis-server /data/sentinel.conf --sentinel
+    ports:
+      - "26380:26379"
+    volumes:
+      - sentinel-redis-sentinel-2-data:/data
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_SENTINEL_PASSWORD}\" -p 26379 ping | grep PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    restart: unless-stopped
+
+  redis-sentinel-3:
+    image: redis:7.4-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /data/sentinel.conf ]; then cat > /data/sentinel.conf <<EOF
+        port 26379
+        sentinel monitor streaming-master 172.29.0.10 6379 2
+        sentinel auth-pass streaming-master $${REDIS_PASSWORD}
+        sentinel down-after-milliseconds streaming-master 3000
+        sentinel failover-timeout streaming-master 10000
+        sentinel parallel-syncs streaming-master 1
+        requirepass $${REDIS_SENTINEL_PASSWORD}
+        EOF
+        fi
+        exec redis-server /data/sentinel.conf --sentinel
+    ports:
+      - "26381:26379"
+    volumes:
+      - sentinel-redis-sentinel-3-data:/data
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_SENTINEL_PASSWORD}\" -p 26379 ping | grep PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: loadtest,sentinel
+      DB_URL: jdbc:mysql://mysql:3306/streaming?createDatabaseIfNotExist=true&serverTimezone=Asia/Seoul
+      DB_USERNAME: streaming
+      DB_PASSWORD: ${MYSQL_PASSWORD:-streaming-mysql-dev}
+      JWT_SECRET: ${JWT_SECRET:-dGVzdC1vbmx5LWp3dC1zZWNyZXQta2V5LTMyLWJ5dGVzISE=}
+      PAYMENT_GATEWAY: fake
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
+      REDIS_SENTINEL_MASTER: streaming-master
+      REDIS_SENTINEL_NODES: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sentinel-mysql-data:
+  sentinel-redis-primary-data:
+  sentinel-redis-replica-data:
+  sentinel-redis-sentinel-1-data:
+  sentinel-redis-sentinel-2-data:
+  sentinel-redis-sentinel-3-data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
