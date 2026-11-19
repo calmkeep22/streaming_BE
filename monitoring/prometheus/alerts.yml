@@ -1,0 +1,171 @@
+groups:
+  - name: streaming-application
+    rules:
+      - alert: StreamingApplicationDown
+        expr: up{job="streaming-app"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Streaming 애플리케이션 메트릭 수집 실패
+          description: Prometheus가 30초 이상 애플리케이션에 접근하지 못했습니다.
+
+      - alert: SeatHoldRedisErrorRatioHigh
+        expr: |
+          sum(rate(seat_hold_redis_operations_total{result="redis_error"}[5m]))
+          /
+          clamp_min(sum(rate(seat_hold_redis_operations_total[5m])), 0.001)
+          > 0.01
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 좌석 선점 Redis 오류율 1% 초과
+          description: 최근 5분 Redis 좌석 연산 중 오류 비율이 2분 이상 1%를 넘었습니다.
+
+      - alert: SeatHoldRedisP95Slow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, operation) (rate(seat_hold_redis_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 좌석 선점 Redis p95 지연 증가
+          description: '{{ $labels.operation }} 연산의 p95가 5분 이상 1초를 넘었습니다.'
+
+      - alert: Http503RatioHigh
+        expr: |
+          sum(rate(http_server_requests_seconds_count{status="503"}[5m]))
+          /
+          clamp_min(sum(rate(http_server_requests_seconds_count[5m])), 0.001)
+          > 0.01
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: HTTP 503 비율 1% 초과
+          description: 최근 5분 요청의 503 비율이 2분 이상 1%를 넘었습니다.
+
+      - alert: DatabaseConnectionWaiters
+        expr: hikaricp_connections_pending > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: DB 커넥션 풀 대기 발생
+          description: HikariCP 커넥션을 기다리는 요청이 2분 이상 존재합니다.
+
+  - name: redis-ha
+    rules:
+      # exporter 자체가 응답하지 않는 경우. Redis 노드가 죽은 것은 아래 RedisNodeDown이 알린다
+      - alert: RedisExporterDown
+        expr: up{job="redis-data"} == 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis exporter 응답 없음
+          description: '{{ $labels.instance }} exporter가 응답하지 않아 해당 Redis 노드 상태를 알 수 없습니다.'
+
+      # exporter는 살아 있고 Redis에 연결하지 못한 경우 (exporter 연결 타임아웃 2초라 스크랩은 성공하고 redis_up=0으로 보고된다)
+      - alert: RedisNodeDown
+        expr: redis_up{job="redis-data"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis 데이터 노드 다운
+          description: '{{ $labels.instance }}의 Redis에 30초 이상 연결할 수 없습니다.'
+
+      # 앱은 정상이어도 Primary가 한 번 더 죽으면 승격할 대상이 없는 상태. 장애 전환 직후 옛 Primary가 안 돌아오면 여기에 걸린다
+      - alert: RedisRedundancyLost
+        expr: max(redis_sentinel_master_ok_slaves{job="redis-sentinel"}) < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis 이중화 상실 (정상 Replica 0대)
+          description: Sentinel이 보는 정상 Replica가 1분 이상 없습니다. 다음 Primary 장애는 자동 전환되지 않습니다.
+
+      # 짧은 장애 전환은 오류율 알림(for 2m)에 걸리지 않으므로, 전환이 있었다는 사실을 따로 남긴다.
+      # config_epoch는 장애 전환마다 1씩 오른다. 10분 동안 firing으로 남았다가 사라진다
+      # 시계열에 master_address 라벨이 있어 전환 때 새 시계열로 바뀌므로, 먼저 master_name으로 묶은 뒤 서브쿼리로 변화를 센다
+      - alert: RedisSentinelFailoverOccurred
+        expr: |
+          changes((max by (master_name) (redis_sentinel_master_config_epoch{job="redis-sentinel"}))[10m:5s]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: Redis Sentinel 장애 전환 발생
+          description: 최근 10분 안에 Primary가 바뀌었습니다. 오류율·지연 그래프에서 전환 구간의 사용자 영향을 확인하세요.
+
+      - alert: RedisExporterScrapeError
+        # 연결 자체가 안 되는 경우(redis_up=0)는 RedisNodeDown이 알리므로, 연결은 됐는데 정보를 못 읽은 경우만 본다
+        expr: |
+          redis_exporter_last_scrape_error{job=~"redis-data|redis-sentinel"} == 1
+          and on (instance) redis_up == 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis exporter 스크랩 오류
+          description: '{{ $labels.instance }} exporter가 Redis 정보를 읽지 못했습니다.'
+
+      - alert: RedisMemoryHigh
+        expr: |
+          redis_memory_max_bytes{job="redis-data"} > 0
+          and
+          redis_memory_used_bytes{job="redis-data"} / redis_memory_max_bytes{job="redis-data"} > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis 메모리 사용률 80% 초과
+          description: '{{ $labels.instance }}의 메모리 사용률이 10분 이상 80%를 넘었습니다.'
+
+      - alert: RedisKeyEvicted
+        expr: increase(redis_evicted_keys_total{job="redis-data"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis 키 eviction 발생
+          description: 최근 5분 동안 {{ $value }}개의 키가 메모리 정책에 의해 제거됐습니다.
+
+      - alert: RedisReplicaLinkDown
+        expr: redis_master_link_up{job="redis-data"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis Replica의 Primary 연결 단절
+          description: '{{ $labels.instance }}가 1분 이상 Primary와 복제하지 못하고 있습니다.'
+
+      - alert: RedisReplicationLagHigh
+        expr: redis_connected_slave_lag_seconds{job="redis-data"} > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis 복제 지연 증가
+          description: '{{ $labels.instance }}의 Replica 지연이 2분 이상 5초를 넘었습니다.'
+
+      - alert: SentinelQuorumLost
+        expr: sum(up{job="redis-sentinel"}) < 2
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis Sentinel quorum 상실
+          description: 응답 가능한 Sentinel이 2대 미만이라 자동 장애 전환을 보장할 수 없습니다.
+
+      - alert: SentinelNodeDown
+        expr: up{job="redis-sentinel"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redis Sentinel 노드 단절
+          description: '{{ $labels.instance }}가 1분 이상 응답하지 않습니다.'

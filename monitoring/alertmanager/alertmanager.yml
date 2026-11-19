@@ -1,0 +1,14 @@
+global:
+  resolve_timeout: 1m
+
+route:
+  receiver: local-ui
+  group_by: [alertname, severity]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+# 로컬 학습 환경에서는 Alertmanager UI(http://localhost:9093)에서 알림을 확인한다.
+# 운영에서는 slack_configs, webhook_configs 같은 실제 수신 채널을 이 receiver에 추가한다.
+receivers:
+  - name: local-ui
