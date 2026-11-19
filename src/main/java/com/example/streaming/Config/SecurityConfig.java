@@ -1,6 +1,7 @@
 package com.example.streaming.Config;
 
 import com.example.streaming.Service.CustomUserDetailService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,6 +29,8 @@ public class SecurityConfig {
 
     @Value("${jwt.secret}")
     private String jwtSecret;
+    @Value("${management.server.port:-1}")
+    private int managementPort;
     @Bean
     public PasswordEncoder passwordEncoder(){
         return new BCryptPasswordEncoder();
@@ -48,12 +51,28 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/payment-test.html"
                         ).permitAll()
+                        .requestMatchers(this::isManagementMonitoringRequest).permitAll()
                         .requestMatchers(HttpMethod.POST, "/events").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2->
                         oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
                 )
                 .build();
+    }
+
+    /**
+     * Prometheus 수집과 헬스 체크는 토큰 없이 받는다. 단, 관리 포트(management.server.port)로 들어온 요청만.
+     * 앱 포트에서도 열면 health 상세(DB·Redis 상태)와 전체 지표가 외부에 그대로 보이므로, 앱 포트에서는 인증이 필요하다.
+     * 관리 포트를 따로 두지 않은 기본 프로필에서는 managementPort가 -1이라 항상 인증이 필요하다.
+     */
+    private boolean isManagementMonitoringRequest(HttpServletRequest request) {
+        if (managementPort <= 0 || request.getLocalPort() != managementPort) {
+            return false;
+        }
+        String uri = request.getRequestURI();
+        return uri.equals("/actuator/prometheus")
+                || uri.equals("/actuator/health")
+                || uri.startsWith("/actuator/health/");
     }
 
     // 토큰의 role 클레임(USER, ADMIN)을 ROLE_ 권한으로 바꾼다 (TokenService가 넣는 값)
