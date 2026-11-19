@@ -23,6 +23,7 @@ services:
     image: redis:7.4-alpine
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-256mb}
     command:
       - /bin/sh
       - -c
@@ -31,6 +32,8 @@ services:
         --appendonly yes
         --requirepass "$${REDIS_PASSWORD}"
         --masterauth "$${REDIS_PASSWORD}"
+        --maxmemory "$${REDIS_MAXMEMORY}"
+        --maxmemory-policy noeviction
     ports:
       - "6379:6379"
     volumes:
@@ -49,6 +52,7 @@ services:
     image: redis:7.4-alpine
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-256mb}
     command:
       - /bin/sh
       - -c
@@ -58,6 +62,8 @@ services:
         --replicaof redis-primary 6379
         --requirepass "$${REDIS_PASSWORD}"
         --masterauth "$${REDIS_PASSWORD}"
+        --maxmemory "$${REDIS_MAXMEMORY}"
+        --maxmemory-policy noeviction
     ports:
       - "6380:6379"
     volumes:
@@ -194,6 +200,7 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:-streaming-mysql-dev}
       JWT_SECRET: ${JWT_SECRET:-dGVzdC1vbmx5LWp3dC1zZWNyZXQta2V5LTMyLWJ5dGVzISE=}
       PAYMENT_GATEWAY: fake
+      METRICS_ENVIRONMENT: sentinel-local
       REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
       REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
       REDIS_SENTINEL_MASTER: streaming-master
@@ -212,6 +219,125 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  redis-primary-exporter:
+    image: oliver006/redis_exporter:v1.95.0
+    environment:
+      REDIS_ADDR: redis://redis-primary:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_EXPORTER_APPEND_INSTANCE_ROLE_LABEL: "true"
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis-replica-exporter:
+    image: oliver006/redis_exporter:v1.95.0
+    environment:
+      REDIS_ADDR: redis://redis-replica:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-streaming-redis-dev}
+      REDIS_EXPORTER_APPEND_INSTANCE_ROLE_LABEL: "true"
+    ports:
+      - "9122:9121"
+    depends_on:
+      redis-replica:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis-sentinel-1-exporter:
+    image: oliver006/redis_exporter:v1.95.0
+    environment:
+      REDIS_ADDR: redis://redis-sentinel-1:26379
+      REDIS_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
+    ports:
+      - "9131:9121"
+    depends_on:
+      redis-sentinel-1:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis-sentinel-2-exporter:
+    image: oliver006/redis_exporter:v1.95.0
+    environment:
+      REDIS_ADDR: redis://redis-sentinel-2:26379
+      REDIS_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
+    ports:
+      - "9132:9121"
+    depends_on:
+      redis-sentinel-2:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis-sentinel-3-exporter:
+    image: oliver006/redis_exporter:v1.95.0
+    environment:
+      REDIS_ADDR: redis://redis-sentinel-3:26379
+      REDIS_PASSWORD: ${REDIS_SENTINEL_PASSWORD:-streaming-sentinel-dev}
+    ports:
+      - "9133:9121"
+    depends_on:
+      redis-sentinel-3:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - sentinel-prometheus-data:/prometheus
+    depends_on:
+      app:
+        condition: service_started
+      redis-primary-exporter:
+        condition: service_started
+      redis-replica-exporter:
+        condition: service_started
+      redis-sentinel-1-exporter:
+        condition: service_started
+      redis-sentinel-2-exporter:
+        condition: service_started
+      redis-sentinel-3-exporter:
+        condition: service_started
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.35.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - sentinel-alertmanager-data:/alertmanager
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-streaming-grafana-dev}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - sentinel-grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   sentinel-mysql-data:
   sentinel-redis-primary-data:
@@ -219,6 +345,9 @@ volumes:
   sentinel-redis-sentinel-1-data:
   sentinel-redis-sentinel-2-data:
   sentinel-redis-sentinel-3-data:
+  sentinel-prometheus-data:
+  sentinel-alertmanager-data:
+  sentinel-grafana-data:
 
 networks:
   default:

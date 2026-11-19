@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+  external_labels:
+    environment: sentinel-local
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  - job_name: streaming-app
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [app:8081]
+
+  - job_name: redis-data
+    static_configs:
+      - targets:
+          - redis-primary-exporter:9121
+          - redis-replica-exporter:9121
+
+  - job_name: redis-sentinel
+    static_configs:
+      - targets:
+          - redis-sentinel-1-exporter:9121
+          - redis-sentinel-2-exporter:9121
+          - redis-sentinel-3-exporter:9121
