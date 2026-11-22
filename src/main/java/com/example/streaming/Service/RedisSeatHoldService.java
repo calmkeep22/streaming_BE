@@ -1,6 +1,8 @@
 package com.example.streaming.Service;
 
 import com.example.streaming.Exception.RedisUnavailableException;
+import com.example.streaming.Monitoring.RedisSeatHoldMetrics;
+import io.micrometer.core.instrument.Timer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -11,6 +13,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -31,23 +34,33 @@ public class RedisSeatHoldService {
 
     private final StringRedisTemplate redisTemplate;
     private final Duration holdTtl;
+    private final RedisSeatHoldMetrics metrics;
 
     public RedisSeatHoldService(StringRedisTemplate redisTemplate,
-                                @Value("${reservation.hold-duration:PT5M}") Duration holdTtl) {
+                                @Value("${reservation.hold-duration:PT5M}") Duration holdTtl,
+                                RedisSeatHoldMetrics metrics) {
         this.redisTemplate = redisTemplate;
         this.holdTtl = holdTtl;
+        this.metrics = metrics;
     }
 
     // SET key value NX EX ttl → 키가 없을 때만 저장(true), 이미 있으면 false
     public boolean hold(Long seatId, Long userId) {
-        Boolean success = executeRedis(() -> redisTemplate.opsForValue()
-                .setIfAbsent(createKey(seatId), userId.toString(), holdTtl));
+        Boolean success = executeRedis(
+                "hold",
+                () -> redisTemplate.opsForValue().setIfAbsent(createKey(seatId), userId.toString(), holdTtl),
+                result -> Boolean.TRUE.equals(result) ? "success" : "conflict"
+        );
         return Boolean.TRUE.equals(success);
     }
 
     // 선점한 사용자 id. 선점이 없거나 만료됐으면 null
     public String getHolder(Long seatId) {
-        return executeRedis(() -> redisTemplate.opsForValue().get(createKey(seatId)));
+        return executeRedis(
+                "get_holder",
+                () -> redisTemplate.opsForValue().get(createKey(seatId)),
+                result -> result == null ? "missing" : "found"
+        );
     }
 
     // 여러 좌석의 선점 사용자 id를 MGET 한 번으로 읽는다. 결과는 seatIds 순서와 같고, 선점이 없으면 null
@@ -55,8 +68,11 @@ public class RedisSeatHoldService {
         if (seatIds.isEmpty()) {
             return List.of();
         }
-        List<String> holders = redisTemplate.opsForValue()
-                .multiGet(seatIds.stream().map(this::createKey).toList());
+        List<String> holders = executeRedis(
+                "get_holders",
+                () -> redisTemplate.opsForValue().multiGet(seatIds.stream().map(this::createKey).toList()),
+                ignored -> "success"
+        );
         return holders != null ? holders : Collections.nCopies(seatIds.size(), null);
     }
 
@@ -66,7 +82,11 @@ public class RedisSeatHoldService {
 
     // 남은 선점 시간(초). 키가 없으면 -2, TTL이 없으면 -1 (Redis TTL 명령 규칙)
     public Long getRemainingSeconds(Long seatId) {
-        return executeRedis(() -> redisTemplate.getExpire(createKey(seatId), TimeUnit.SECONDS));
+        return executeRedis(
+                "get_ttl",
+                () -> redisTemplate.getExpire(createKey(seatId), TimeUnit.SECONDS),
+                ttl -> ttl != null && ttl >= 0 ? "active" : "missing"
+        );
     }
 
     /**
@@ -76,15 +96,24 @@ public class RedisSeatHoldService {
      * 버전과 무관하게 원자적으로 동작하는 Lua 스크립트(GET 비교 + DEL)를 쓴다.
      */
     public boolean release(Long seatId, Long userId) {
-        Long deleted = executeRedis(() ->
-                redisTemplate.execute(RELEASE_SCRIPT, List.of(createKey(seatId)), userId.toString()));
+        Long deleted = executeRedis(
+                "release",
+                () -> redisTemplate.execute(RELEASE_SCRIPT, List.of(createKey(seatId)), userId.toString()),
+                result -> Long.valueOf(1L).equals(result) ? "released" : "not_owner"
+        );
         return Long.valueOf(1L).equals(deleted);
     }
 
-    private <T> T executeRedis(Supplier<T> operation) {
+    private <T> T executeRedis(String operationName,
+                               Supplier<T> operation,
+                               Function<T, String> resultClassifier) {
+        Timer.Sample sample = metrics.start();
         try {
-            return operation.get();
+            T result = operation.get();
+            metrics.record(operationName, resultClassifier.apply(result), sample);
+            return result;
         } catch (DataAccessException e) {
+            metrics.record(operationName, "redis_error", sample);
             throw new RedisUnavailableException(
                     "좌석 선점 저장소를 일시적으로 사용할 수 없습니다.",
                     e

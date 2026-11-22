@@ -1,6 +1,8 @@
 package com.example.streaming.Service;
 
 import com.example.streaming.RedisTestSupport;
+import com.example.streaming.Monitoring.RedisSeatHoldMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -26,7 +28,9 @@ class RedisSeatHoldServiceTest {
     static LettuceConnectionFactory connectionFactory;
     static StringRedisTemplate redisTemplate;
 
-    RedisSeatHoldService holdService = new RedisSeatHoldService(redisTemplate, TTL);
+    SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+    RedisSeatHoldMetrics metrics = new RedisSeatHoldMetrics(meterRegistry);
+    RedisSeatHoldService holdService = new RedisSeatHoldService(redisTemplate, TTL, metrics);
 
     @BeforeAll
     static void connect() {
@@ -60,6 +64,9 @@ class RedisSeatHoldServiceTest {
         assertThat(holdService.getHolder(SEAT_ID)).isEqualTo("1");
         assertThat(holdService.isHeldBy(SEAT_ID, 1L)).isTrue();
         assertThat(holdService.getRemainingSeconds(SEAT_ID)).isBetween(1L, TTL.toSeconds());
+        assertThat(meterRegistry.counter(
+                "seat.hold.redis.operations", "operation", "hold", "result", "success"
+        ).count()).isEqualTo(1.0);
     }
 
     @Test
@@ -110,7 +117,11 @@ class RedisSeatHoldServiceTest {
     @Test
     @DisplayName("TTL이 지나면 선점이 풀리고, 늦게 도착한 이전 사용자의 해제 요청은 새 선점을 지우지 않는다")
     void expire_thenLateReleaseDoesNotDeleteNewHold() throws InterruptedException {
-        RedisSeatHoldService shortHold = new RedisSeatHoldService(redisTemplate, Duration.ofMillis(500));
+        RedisSeatHoldService shortHold = new RedisSeatHoldService(
+                redisTemplate,
+                Duration.ofMillis(500),
+                metrics
+        );
         shortHold.hold(SEAT_ID, 1L);
 
         Thread.sleep(800);
