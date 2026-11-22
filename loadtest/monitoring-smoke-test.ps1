@@ -1,6 +1,6 @@
 param(
     [string]$ComposeFile = "docker-compose.sentinel.yml",
-    [int]$TimeoutSeconds = 180,
+    [int]$TimeoutSeconds = 300,
     [switch]$RunFailover
 )
 
@@ -40,6 +40,32 @@ function Invoke-PrometheusQuery {
     return $response.data.result
 }
 
+function Wait-PrometheusTargetsHealthy {
+    $expectedJobs = @("streaming-app", "redis-data", "redis-sentinel")
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastTargets = @()
+
+    do {
+        $targetsResponse = Invoke-RestMethod -Uri "$prometheusBaseUrl/api/v1/targets"
+        $lastTargets = @(
+            $targetsResponse.data.activeTargets |
+                Where-Object { $_.labels.job -in $expectedJobs }
+        )
+        $unhealthyTargets = @($lastTargets | Where-Object { $_.health -ne "up" })
+
+        if ($lastTargets.Count -eq 6 -and $unhealthyTargets.Count -eq 0) {
+            return $lastTargets
+        }
+
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+    $details = $lastTargets | ForEach-Object {
+        "$($_.labels.job):$($_.scrapeUrl)=$($_.health) error=$($_.lastError)"
+    }
+    throw "Prometheus targets did not become healthy: $($details -join ', ')"
+}
+
 Write-Host "Starting application and monitoring stack..."
 & docker compose -f $composePath up -d
 if ($LASTEXITCODE -ne 0) {
@@ -49,28 +75,23 @@ if ($LASTEXITCODE -ne 0) {
 Wait-HttpOk "$prometheusBaseUrl/-/ready"
 Wait-HttpOk "$grafanaBaseUrl/api/health"
 Wait-HttpOk "$alertmanagerBaseUrl/-/ready"
+Wait-HttpOk "http://localhost:8081/actuator/health"
 
-$targetsResponse = Invoke-RestMethod -Uri "$prometheusBaseUrl/api/v1/targets"
-$expectedJobs = @("streaming-app", "redis-data", "redis-sentinel")
-$activeTargets = @($targetsResponse.data.activeTargets | Where-Object { $_.labels.job -in $expectedJobs })
-$unhealthyTargets = @($activeTargets | Where-Object { $_.health -ne "up" })
+$activeTargets = Wait-PrometheusTargetsHealthy
 
-if ($activeTargets.Count -ne 6) {
-    throw "Expected 6 scrape targets but found $($activeTargets.Count)."
-}
-if ($unhealthyTargets.Count -gt 0) {
-    $details = $unhealthyTargets | ForEach-Object { "$($_.labels.job):$($_.scrapeUrl)=$($_.health)" }
-    throw "Unhealthy Prometheus targets: $($details -join ', ')"
-}
-
-$upByJob = Invoke-PrometheusQuery 'sum by (job) (up{job=~"streaming-app|redis-data|redis-sentinel"})'
+$upByJob = @(Invoke-PrometheusQuery 'sum by (job) (up{job=~"streaming-app|redis-data|redis-sentinel"})')
 $upByJob | ForEach-Object {
     Write-Host ("UP job={0} targets={1}" -f $_.metric.job, $_.value[1])
 }
 
-$redisScrapeErrors = Invoke-PrometheusQuery 'sum(redis_exporter_last_scrape_error{job=~"redis-data|redis-sentinel"})'
-if ($redisScrapeErrors.Count -eq 0 -or [double]$redisScrapeErrors[0].value[1] -ne 0) {
+$redisScrapeErrors = @(Invoke-PrometheusQuery 'max(redis_exporter_last_scrape_error{job=~"redis-data|redis-sentinel"})')
+if ($redisScrapeErrors.Count -gt 0 -and [double]$redisScrapeErrors[0].value[1] -ne 0) {
     throw "At least one Redis exporter cannot scrape its target."
+}
+
+$redisUp = @(Invoke-PrometheusQuery 'min(redis_up{job=~"redis-data|redis-sentinel"})')
+if ($redisUp.Count -eq 0 -or [double]$redisUp[0].value[1] -ne 1) {
+    throw "At least one Redis or Sentinel target reports redis_up=0."
 }
 
 if ($RunFailover) {
@@ -81,7 +102,7 @@ if ($RunFailover) {
     }
 
     Start-Sleep -Seconds 10
-    $sentinelUp = Invoke-PrometheusQuery 'sum(up{job="redis-sentinel"})'
+    $sentinelUp = @(Invoke-PrometheusQuery 'sum(up{job="redis-sentinel"})')
     if ($sentinelUp.Count -eq 0 -or [double]$sentinelUp[0].value[1] -lt 2) {
         throw "Sentinel quorum was not restored after failover."
     }
