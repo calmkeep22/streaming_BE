@@ -35,4 +35,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: node --test loadtest/test/config.test.mjs loadtest/test/metrics.test.mjs loadtest/test/suite.test.mjs
+      - run: node --test loadtest/test/*.test.mjs
+      - name: Validate Sentinel event parsing
+        shell: pwsh
+        run: ./loadtest/test/sentinel-events.test.ps1
