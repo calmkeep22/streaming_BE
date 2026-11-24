@@ -38,6 +38,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.containers.GenericContainer;
@@ -74,12 +75,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 @AutoConfigureMockMvc
 @Import(PaymentWorkflowIntegrationTest.GatewayConfiguration.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Timeout(120)
 class PaymentWorkflowIntegrationTest {
 
     @Container
     static final MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.0.44")
-            .withDatabaseName("payment_workflow_test").withUsername("test").withPassword("test");
+            .withDatabaseName("payment_workflow_test").withUsername("test").withPassword("test")
+            // Allow fault-injection triggers only in this disposable test database server.
+            .withCommand("--log-bin-trust-function-creators=1");
 
     @Container
     static final GenericContainer<?> redis = new GenericContainer<>("redis:7.4-alpine")
