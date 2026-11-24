@@ -61,7 +61,7 @@ cat "$key_dir/key"
     values = {'SSH_KEY': private_key, 'HOST': host, 'KNOWN_HOSTS': known.read_text()}
     for suffix, value in values.items():
         subprocess.run(['gh', 'secret', 'set', component.upper() + '_' + suffix,
-                        '--repo', args.repository], input=value, text=True, check=True)
+                        '--repo', args.repository], input=value.encode('utf-8'), check=True)
     values.clear()
     private_key = None
     result = None
