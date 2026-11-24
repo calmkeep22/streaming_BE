@@ -7,6 +7,7 @@ import com.example.streaming.Entity.PaymentStatus;
 import com.example.streaming.Service.PaymentService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -63,6 +64,17 @@ public class PaymentController {
                 ? HttpStatus.ACCEPTED
                 : HttpStatus.OK;
         return ResponseEntity.status(status).body(response);
+    }
+
+    // 조회 시점에 DB에 저장된 상태를 반환한다. 승인·복구 작업은 실행하지 않는다.
+    @GetMapping("/payments/{orderId}")
+    public ResponseEntity<PaymentResponse> getPayment(
+            @PathVariable String orderId,
+            @AuthenticationPrincipal Jwt jwt
+    ) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(paymentService.getPayment(userId(jwt), orderId));
     }
 
     @GetMapping("/payments/client-config")
