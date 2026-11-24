@@ -1,12 +1,15 @@
 package com.example.streaming.Service;
 
 import com.example.streaming.Dto.EventCreateRequest;
+import com.example.streaming.Dto.EventPageResponse;
 import com.example.streaming.Dto.EventResponse;
+import com.example.streaming.Dto.EventSearchRequest;
 import com.example.streaming.Dto.SeatResponse;
 import com.example.streaming.Entity.EventEntity;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.SeatStatus;
+import com.example.streaming.Exception.EventNotFoundException;
 import com.example.streaming.Repository.EventRepository;
 import com.example.streaming.Repository.ReservationRepository;
 import com.example.streaming.Repository.SeatRepository;
@@ -14,14 +17,21 @@ import com.example.streaming.Repository.SeatRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
-import jakarta.transaction.Transactional;
+import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 @Service
@@ -101,6 +111,50 @@ public class EventService {
                 event.getStartTime(),
                 seats.size()
         );
+    }
+
+    @Transactional(readOnly = true)
+    public EventPageResponse getEvents(EventSearchRequest request) {
+        if (request.from() != null && request.to() != null && request.from().isAfter(request.to())) {
+            throw new IllegalArgumentException("시작일은 종료일보다 늦을 수 없습니다.");
+        }
+        if (LocalDate.MAX.equals(request.to())) {
+            throw new IllegalArgumentException("종료일이 허용 범위를 벗어났습니다.");
+        }
+
+        // 종료일 다음 날 00:00 미만으로 비교해 종료일의 모든 공연을 포함한다.
+        Page<EventEntity> events = eventRepository.search(titlePattern(request.keyword()),
+                request.from() == null ? null : request.from().atStartOfDay(),
+                request.to() == null ? null : request.to().plusDays(1).atStartOfDay(),
+                PageRequest.of(request.page(), request.size(), Sort.by("startTime", "id")));
+
+        List<Long> eventIds = events.getContent().stream().map(EventEntity::getId).toList();
+        Map<Long, Integer> seatCounts = eventIds.isEmpty() ? Map.of()
+                : seatRepository.countByEventIds(eventIds).stream().collect(Collectors.toMap(
+                        SeatRepository.EventSeatCount::getEventId,
+                        count -> Math.toIntExact(count.getSeatCount())));
+
+        return EventPageResponse.from(events.map(event -> toEventResponse(event,
+                seatCounts.getOrDefault(event.getId(), 0))));
+    }
+
+    @Transactional(readOnly = true)
+    public EventResponse getEvent(Long eventId) {
+        EventEntity event = eventRepository.findById(eventId).orElseThrow(EventNotFoundException::new);
+        return toEventResponse(event, Math.toIntExact(seatRepository.countByEvent_Id(eventId)));
+    }
+
+    private EventResponse toEventResponse(EventEntity event, int seatCount) {
+        return new EventResponse(event.getId(), event.getTitle(), event.getStartTime(), seatCount);
+    }
+
+    private String titlePattern(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return null;
+        }
+        // 사용자가 입력한 %, _, !는 검색 문법이 아닌 제목의 문자로 취급한다.
+        return "%" + keyword.strip().toLowerCase(Locale.ROOT)
+                .replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
     }
 
     /**

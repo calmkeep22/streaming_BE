@@ -3,6 +3,7 @@ package com.example.streaming.Controller;
 import com.example.streaming.Exception.SeatUnavailableException;
 import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Exception.RedisUnavailableException;
+import com.example.streaming.Exception.EventNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
@@ -19,6 +20,11 @@ import java.util.Map;
  */
 @RestControllerAdvice
 public class ReservationExceptionHandler {
+
+    @ExceptionHandler(EventNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleEventNotFound(EventNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", e.getMessage()));
+    }
 
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<Map<String, String>> handleForbidden(ForbiddenException e) {

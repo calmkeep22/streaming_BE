@@ -25,6 +25,17 @@ public class EventController {
         this.reservationService = reservationService;
     }
 
+    // from/to: YYYY-MM-DD, 양 끝 날짜 포함. page는 0부터 시작한다.
+    @GetMapping
+    public ResponseEntity<EventPageResponse> getEvents(@Valid @ModelAttribute EventSearchRequest request) {
+        return ResponseEntity.ok(eventService.getEvents(request));
+    }
+
+    @GetMapping("/{eventId}")
+    public ResponseEntity<EventResponse> getEvent(@PathVariable Long eventId) {
+        return ResponseEntity.ok(eventService.getEvent(eventId));
+    }
+
     // 관리자만 호출할 수 있다 (SecurityConfig)
     @PostMapping
     public ResponseEntity<EventResponse> createEvent(
