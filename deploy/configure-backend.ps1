@@ -1,0 +1,28 @@
+param(
+    [string]$DbHost = '10.0.1.219',
+    [int]$DbPort = 3306,
+    [string]$DbAdminUser = 'admin',
+    [string]$BackendHost = '129.225.185.153',
+    [string]$BackendKey = "$env:USERPROFILE\Downloads\ssh-key-2026-11-24 (1).key",
+    [string]$KnownHosts = "$env:TEMP/streaming-oci-new-known-hosts"
+)
+$ErrorActionPreference = 'Stop'
+$securePassword = Read-Host 'MySQL administrator password (hidden)' -AsSecureString
+$passwordPointer = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+try {
+    $plainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
+    $settings = @{ host = $DbHost; port = $DbPort; username = $DbAdminUser; password = $plainPassword }
+    $json = $settings | ConvertTo-Json -Compress
+    $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+    $payload | ssh -i $BackendKey -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes `
+        -o "UserKnownHostsFile=$KnownHosts" "opc@$BackendHost" `
+        'sudo -n python3 -I /opt/streaming/secure-ci-setup/deploy/scripts/configure-managed-mysql.py'
+    if ($LASTEXITCODE -ne 0) { throw 'Database setup failed. See the sanitized server error above.' }
+} finally {
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
+    $plainPassword = $null
+    $json = $null
+    $payload = $null
+    if ($settings) { $settings.Clear() }
+    $securePassword.Dispose()
+}

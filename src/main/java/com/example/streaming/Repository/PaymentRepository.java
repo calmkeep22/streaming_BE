@@ -18,6 +18,9 @@ public interface PaymentRepository extends JpaRepository<PaymentEntity, Long> {
     @EntityGraph(attributePaths = {"user", "seat", "reservation"})
     Optional<PaymentEntity> findByOrderId(String orderId);
 
+    @EntityGraph(attributePaths = {"seat", "reservation"})
+    Optional<PaymentEntity> findByOrderIdAndUser_Id(String orderId, Long userId);
+
     boolean existsByOrderId(String orderId);
 
     // 예약에 연결된 결제 중 아직 환불이 끝나지 않은 것 (예약 취소 시 환불 대상)

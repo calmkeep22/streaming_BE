@@ -9,6 +9,7 @@ import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.UserEntity;
 import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Exception.PaymentGatewayException;
+import com.example.streaming.Exception.PaymentNotFoundException;
 import com.example.streaming.Exception.SeatUnavailableException;
 import com.example.streaming.Repository.PaymentRepository;
 import com.example.streaming.Repository.ReservationRepository;
@@ -61,6 +62,14 @@ public class PaymentService {
         this.paymentGateway = paymentGateway;
         this.transactionTemplate = transactionTemplate;
         this.ticketPrice = ticketPrice;
+    }
+
+    @Transactional(readOnly = true)
+    public PaymentResponse getPayment(Long userId, String orderId) {
+        // 타인 주문과 없는 주문은 같은 응답을 준다. 주문의 존재 여부도 노출하지 않는다.
+        PaymentEntity payment = paymentRepository.findByOrderIdAndUser_Id(orderId, userId)
+                .orElseThrow(PaymentNotFoundException::new);
+        return PaymentResponse.from(payment);
     }
 
     /**
