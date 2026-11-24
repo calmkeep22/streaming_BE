@@ -17,7 +17,13 @@ FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
-COPY --from=build /workspace/build/libs/*.jar app.jar
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build --chown=10001:10001 /workspace/build/libs/*.jar app.jar
+
+USER 10001:10001
 
 EXPOSE 8080 8081
 

@@ -5,5 +5,10 @@
 build
 out
 .env
+.env.*
+*.key
+*.pem
+blog
+docs
 loadtest/results
 *.iml

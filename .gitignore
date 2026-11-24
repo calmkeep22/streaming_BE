@@ -40,8 +40,15 @@ out/
 loadtest/.env
 loadtest/results/
 .env
+.env.*
+!.env.example
+*.key
+*.pem
+__pycache__/
+*.pyc
 
 # Local publication helpers and documents are not part of the source repository.
 .portfolio/
 *.md
 docs/
+!deploy/README.md

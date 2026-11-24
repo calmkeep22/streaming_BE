@@ -1,0 +1,137 @@
+name: streaming-backend
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+x-redis: &redis
+  image: redis:7.4-alpine
+  user: redis
+  restart: unless-stopped
+  logging: *logging
+  environment: &redis-env
+    REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+  healthcheck:
+    test: [CMD-SHELL, 'REDISCLI_AUTH="$${REDIS_PASSWORD}" redis-cli ping | grep -q PONG']
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+x-sentinel: &sentinel
+  <<: *redis
+  command: [sh, /etc/streaming/sentinel-start.sh]
+  environment:
+    <<: *redis-env
+    REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:?Set REDIS_SENTINEL_PASSWORD}
+  healthcheck:
+    test: [CMD-SHELL, 'REDISCLI_AUTH="$${REDIS_SENTINEL_PASSWORD}" redis-cli -p 26379 ping | grep -q PONG']
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+services:
+  redis-primary:
+    <<: *redis
+    command: [sh, /etc/streaming/redis-start.sh]
+    volumes:
+      - redis-primary-data:/data
+      - ./redis-start.sh:/etc/streaming/redis-start.sh:ro,z
+    networks:
+      default:
+        ipv4_address: 172.30.0.10
+
+  redis-replica:
+    <<: *redis
+    command: [sh, /etc/streaming/redis-start.sh]
+    environment:
+      <<: *redis-env
+      INITIAL_REPLICA: 'true'
+    volumes:
+      - redis-replica-data:/data
+      - ./redis-start.sh:/etc/streaming/redis-start.sh:ro,z
+    networks:
+      default:
+        ipv4_address: 172.30.0.11
+
+  redis-sentinel-1:
+    <<: *sentinel
+    volumes:
+      - sentinel-1-data:/data
+      - ./sentinel-start.sh:/etc/streaming/sentinel-start.sh:ro,z
+
+  redis-sentinel-2:
+    <<: *sentinel
+    volumes:
+      - sentinel-2-data:/data
+      - ./sentinel-start.sh:/etc/streaming/sentinel-start.sh:ro,z
+
+  redis-sentinel-3:
+    <<: *sentinel
+    volumes:
+      - sentinel-3-data:/data
+      - ./sentinel-start.sh:/etc/streaming/sentinel-start.sh:ro,z
+
+  app:
+    image: ${APP_IMAGE:?Set APP_IMAGE to an immutable image reference}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging: *logging
+    environment:
+      SPRING_PROFILES_ACTIVE: sentinel,prod
+      DB_URL: ${DB_URL:?Set managed MySQL DB_URL}
+      DB_USERNAME: ${DB_USERNAME:?Set DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+      REDIS_SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:?Set REDIS_SENTINEL_PASSWORD}
+      REDIS_SENTINEL_MASTER: streaming-master
+      REDIS_SENTINEL_NODES: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      PAYMENT_GATEWAY: ${PAYMENT_GATEWAY:-fake}
+      TOSS_SECRET_KEY: ${TOSS_SECRET_KEY:-}
+      TOSS_CLIENT_KEY: ${TOSS_CLIENT_KEY:-}
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError
+      TZ: Asia/Seoul
+    ports:
+      - 127.0.0.1:8081:8081
+    depends_on:
+      redis-sentinel-1: {condition: service_healthy}
+      redis-sentinel-2: {condition: service_healthy}
+      redis-sentinel-3: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, -fsS, --max-time, '3', http://127.0.0.1:8081/actuator/health/readiness]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
+    stop_grace_period: 40s
+    mem_limit: 2g
+
+  nginx:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - 127.0.0.1:8080:80
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro,Z
+    depends_on:
+      app: {condition: service_healthy}
+
+volumes:
+  redis-primary-data:
+  redis-replica-data:
+  sentinel-1-data:
+  sentinel-2-data:
+  sentinel-3-data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
