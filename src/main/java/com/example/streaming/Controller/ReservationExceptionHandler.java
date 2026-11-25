@@ -6,6 +6,7 @@ import com.example.streaming.Exception.RedisUnavailableException;
 import com.example.streaming.Exception.EventNotFoundException;
 import com.example.streaming.Exception.PaymentNotFoundException;
 import com.example.streaming.Exception.AdmissionDeniedException;
+import com.example.streaming.Exception.MediaAuthenticationException;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +24,12 @@ import java.util.Map;
  */
 @RestControllerAdvice
 public class ReservationExceptionHandler {
+
+    @ExceptionHandler(MediaAuthenticationException.class)
+    public ResponseEntity<Map<String, String>> handleMediaAuthentication(MediaAuthenticationException e) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).cacheControl(CacheControl.noStore())
+                .body(Map.of("message", "Media authentication failed"));
+    }
 
     @ExceptionHandler(AdmissionDeniedException.class)
     public ResponseEntity<Map<String, String>> handleAdmissionDenied(AdmissionDeniedException e) {

@@ -39,8 +39,13 @@ jobs:
         run: |
           for script in deploy/scripts/*.sh deploy/backend/*.sh; do bash -n "$script"; done
           python3 -m unittest discover -s deploy/tests -v
+          bash deploy/scripts/verify-workflows.sh
           APP_IMAGE=streaming:test docker compose --env-file deploy/backend/.env.example -f deploy/backend/compose.yml config --quiet
           docker compose --env-file deploy/media/.env.example -f deploy/media/compose.yml config --quiet
+          tls_dir=$(mktemp -d)
+          trap 'rm -rf -- "$tls_dir"' EXIT
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=ci-media-auth -keyout "$tls_dir/tls.key" -out "$tls_dir/tls.crt" >/dev/null 2>&1
+          docker run --rm --network none -v "$PWD/deploy/backend/nginx.conf:/etc/nginx/nginx.conf:ro" -v "$tls_dir:/etc/streaming/media-auth:ro" nginx:1.28-alpine nginx -t
       - name: Prepare Docker build verification
         if: github.event_name == 'pull_request'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3

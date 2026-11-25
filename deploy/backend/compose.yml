@@ -95,6 +95,11 @@ services:
       PAYMENT_GATEWAY: ${PAYMENT_GATEWAY:-fake}
       TOSS_SECRET_KEY: ${TOSS_SECRET_KEY:-}
       TOSS_CLIENT_KEY: ${TOSS_CLIENT_KEY:-}
+      MEDIA_ENABLED: ${MEDIA_ENABLED:-false}
+      MEDIA_TOKEN_SECRET: ${MEDIA_TOKEN_SECRET:-}
+      MEDIA_TICKET_TTL: ${MEDIA_TICKET_TTL:-PT2M}
+      MEDIA_PUBLISHER_PASSWORD_HASH: ${MEDIA_PUBLISHER_PASSWORD_HASH:-}
+      MEDIA_MONITOR_PASSWORD_HASH: ${MEDIA_MONITOR_PASSWORD_HASH:-}
       JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError
       TZ: Asia/Seoul
     ports:
@@ -118,8 +123,10 @@ services:
     logging: *logging
     ports:
       - 127.0.0.1:8080:80
+      - ${MEDIA_CALLBACK_BIND_IP:-127.0.0.1}:8082:81
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro,Z
+      - /opt/streaming/shared/media-auth-tls:/etc/streaming/media-auth:ro,Z
     depends_on:
       app: {condition: service_healthy}
 

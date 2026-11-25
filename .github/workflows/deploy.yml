@@ -48,7 +48,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
+  deploy-backend:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -56,26 +56,14 @@ jobs:
     permissions:
       contents: read
       packages: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - component: backend
-            host: BACKEND_HOST
-            key: BACKEND_SSH_KEY
-            known_hosts: BACKEND_KNOWN_HOSTS
-          - component: media
-            host: MEDIA_HOST
-            key: MEDIA_SSH_KEY
-            known_hosts: MEDIA_KNOWN_HOSTS
     env:
-      DEPLOY_HOST: ${{ secrets[matrix.host] }}
-      SSH_PRIVATE_KEY: ${{ secrets[matrix.key] }}
-      SSH_KNOWN_HOSTS: ${{ secrets[matrix.known_hosts] }}
+      DEPLOY_HOST: ${{ secrets.BACKEND_HOST }}
+      SSH_PRIVATE_KEY: ${{ secrets.BACKEND_SSH_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.BACKEND_KNOWN_HOSTS }}
       APP_IMAGE: ${{ needs.build.outputs.image }}
       REGISTRY_USER: ${{ github.actor }}
       REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      COMPONENT: ${{ matrix.component }}
+      COMPONENT: backend
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Prepare pinned SSH connection
@@ -89,6 +77,39 @@ jobs:
           chmod 600 ~/.ssh/deploy ~/.ssh/known_hosts
       - name: Deploy through restricted SSH entry point
         shell: bash
+        run: python3 deploy/send-deployment.py
+      - name: Remove runner credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy ~/.ssh/known_hosts
+
+  deploy-media:
+    needs: [build, deploy-backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DEPLOY_HOST: ${{ secrets.MEDIA_HOST }}
+      SSH_PRIVATE_KEY: ${{ secrets.MEDIA_SSH_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.MEDIA_KNOWN_HOSTS }}
+      APP_IMAGE: ${{ needs.build.outputs.image }}
+      REGISTRY_USER: ${{ github.actor }}
+      REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      COMPONENT: media
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare pinned SSH connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy ~/.ssh/known_hosts
+      - name: Deploy through restricted SSH entry point
         run: python3 deploy/send-deployment.py
       - name: Remove runner credentials
         if: always()
