@@ -127,6 +127,7 @@ class PaymentControllerTest {
     }
 
     private PaymentResponse response(Long reservationId, PaymentStatus status) {
-        return new PaymentResponse(10L, "order-1", reservationId, 100L, 50_000L, "KRW", status);
+        return new PaymentResponse(10L, "order-1", reservationId, 100L, 50_000L, "KRW", status,
+                com.example.streaming.Entity.SeatGrade.STANDARD);
     }
 }
