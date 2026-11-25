@@ -5,6 +5,8 @@ import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Exception.RedisUnavailableException;
 import com.example.streaming.Exception.EventNotFoundException;
 import com.example.streaming.Exception.PaymentNotFoundException;
+import com.example.streaming.Exception.AdmissionDeniedException;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.AuthenticationException;
@@ -21,6 +23,12 @@ import java.util.Map;
  */
 @RestControllerAdvice
 public class ReservationExceptionHandler {
+
+    @ExceptionHandler(AdmissionDeniedException.class)
+    public ResponseEntity<Map<String, String>> handleAdmissionDenied(AdmissionDeniedException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).cacheControl(CacheControl.noStore())
+                .body(Map.of("message", e.getMessage()));
+    }
 
     @ExceptionHandler(PaymentNotFoundException.class)
     public ResponseEntity<Map<String, String>> handlePaymentNotFound(PaymentNotFoundException e) {

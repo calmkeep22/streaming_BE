@@ -26,13 +26,15 @@ class SeatPricingMigrationTest {
     void upgradesLegacyRowsCanBeRetriedAndMatchesHibernateSchema() throws Exception {
         try (Connection connection = DriverManager.getConnection(mysql.getJdbcUrl(), "test", "test");
              Statement statement = connection.createStatement()) {
-            // Start with the real bootstrap schema, then remove the three additions to reproduce the deployed schema.
+            // Reproduce the schema before pricing/admission migrations, including legacy unpaid reservations.
             ScriptUtils.executeSqlScript(connection, new FileSystemResource("deploy/backend/init/001-schema.sql"));
             statement.execute("ALTER TABLE seat_entity DROP COLUMN grade, DROP COLUMN price");
             statement.execute("ALTER TABLE payments DROP COLUMN seat_grade");
+            statement.execute("ALTER TABLE reservation_entity DROP COLUMN admission_type");
             statement.execute("INSERT INTO users(email,password,role) VALUES ('old@test','hash','USER')");
             statement.execute("INSERT INTO event_entity(title,start_time) VALUES ('old event','2099-01-01')");
             statement.execute("INSERT INTO seat_entity(event_id,seat_number,version) VALUES (1,7,0)");
+            statement.execute("INSERT INTO reservation_entity(user_id,seat_id,status,active_seat_id) VALUES (1,1,'RESERVED',1)");
             statement.execute("INSERT INTO payments(order_id,user_id,seat_id,amount,currency,status,provider,requested_at) "
                     + "VALUES ('old-order',1,1,70000,'KRW','SUCCESS','FAKE',NOW())");
 
@@ -60,6 +62,19 @@ class SeatPricingMigrationTest {
                 assertThat(row.getLong(1)).isEqualTo(70000);
                 assertThat(row.getString(2)).isEqualTo("STANDARD");
                 assertThat(row.getString(3)).isEqualTo("SUCCESS");
+            }
+            FileSystemResource admission = new FileSystemResource("deploy/backend/migrations/003-reservation-admission.sql");
+            ScriptUtils.executeSqlScript(connection, admission);
+            try (var row = statement.executeQuery("SELECT admission_type,status FROM reservation_entity WHERE id=1")) {
+                assertThat(row.next()).isTrue();
+                assertThat(row.getString(1)).isEqualTo("PAID");
+                assertThat(row.getString(2)).isEqualTo("RESERVED");
+            }
+            statement.execute("UPDATE reservation_entity SET admission_type='FREE' WHERE id=1");
+            ScriptUtils.executeSqlScript(connection, admission);
+            try (var row = statement.executeQuery("SELECT admission_type FROM reservation_entity WHERE id=1")) {
+                assertThat(row.next()).isTrue();
+                assertThat(row.getString(1)).isEqualTo("FREE");
             }
         }
         var registry = new StandardServiceRegistryBuilder()

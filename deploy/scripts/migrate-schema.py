@@ -1,4 +1,4 @@
-"""Apply the additive seat-pricing migration; receive administrator credentials via stdin."""
+"""Apply an allowlisted additive migration; receive administrator credentials via stdin."""
 import base64
 import fcntl
 import ipaddress
@@ -11,6 +11,9 @@ import sys
 
 
 def main():
+    migrations = {'seat-pricing': '002-seat-grade-pricing.sql', 'admission': '003-reservation-admission.sql'}
+    if len(sys.argv) != 2 or sys.argv[1] not in migrations:
+        raise ValueError("Unknown migration")
     os.umask(0o077)
     raw = sys.stdin.buffer.read(65537)
     if len(raw) > 65536:
@@ -23,7 +26,7 @@ def main():
         raise ValueError("A private database IPv4 address and valid port are required")
     if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,31}", user) or not settings["password"]:
         raise ValueError("Administrator credentials are required")
-    migration = Path(__file__).resolve().parents[1] / "backend/migrations/002-seat-grade-pricing.sql"
+    migration = Path(__file__).resolve().parents[1] / "backend/migrations" / migrations[sys.argv[1]]
     sql = migration.read_text(encoding="utf-8")
     # Serialize with deployment/bootstrap. Do not modify the application environment or credentials.
     with Path("/opt/streaming/deploy.lock").open("a") as lock:
@@ -37,7 +40,7 @@ def main():
         if result.returncode:
             code = re.search(r"ERROR (\d+)", result.stderr)
             raise RuntimeError("MySQL migration failed" + (" (error " + code.group(1) + ")" if code else ""))
-    print("Seat pricing migration completed; existing rows and credentials preserved")
+    print("Schema migration completed; existing rows and credentials preserved")
 
 
 if __name__ == "__main__":

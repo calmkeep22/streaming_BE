@@ -31,6 +31,11 @@ public class ReservationEntity {
     @Enumerated(EnumType.STRING)
     private ReservationStatus status;
 
+    // 예약을 만들 때 확정한 입장 방식. 이후 좌석 가격/등급 변경으로 결제 조건이 바뀌지 않는다.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "admission_type", nullable = false, updatable = false, length = 20)
+    private AdmissionType admissionType;
+
     @Column(name = "active_seat_id")
     private Long activeSeatId;
 
@@ -38,10 +43,22 @@ public class ReservationEntity {
 
     // 선점은 Redis에 있으므로 DB에는 바로 확정 상태로 만든다
     public static ReservationEntity reserved(UserEntity user, SeatEntity seat) {
+        return create(user, seat, AdmissionType.PAID);
+    }
+
+    public static ReservationEntity free(UserEntity user, SeatEntity seat) {
+        if (seat.getGrade() != SeatGrade.FREE || seat.getPrice() != 0L) {
+            throw new IllegalArgumentException("무료 좌석만 결제 없이 예약할 수 있습니다.");
+        }
+        return create(user, seat, AdmissionType.FREE);
+    }
+
+    private static ReservationEntity create(UserEntity user, SeatEntity seat, AdmissionType admissionType) {
         ReservationEntity reservation = new ReservationEntity();
         reservation.user = user;
         reservation.seat = seat;
         reservation.status = ReservationStatus.RESERVED;
+        reservation.admissionType = admissionType;
         reservation.activeSeatId = seat.getId();
         return reservation;
     }

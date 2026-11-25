@@ -3,15 +3,20 @@ package com.example.streaming.Repository;
 import com.example.streaming.Entity.ReservationEntity;
 import com.example.streaming.Entity.ReservationStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface ReservationRepository
         extends JpaRepository<ReservationEntity, Long> {
 
     List<ReservationEntity> findAllByUser_Id(Long userId);
+
+    @EntityGraph(attributePaths = {"seat.event"})
+    Optional<ReservationEntity> findBySeat_IdAndUser_IdAndStatus(Long seatId, Long userId, ReservationStatus status);
 
     boolean existsBySeat_IdAndStatus(Long seatId, ReservationStatus status);
 

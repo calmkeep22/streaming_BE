@@ -29,6 +29,7 @@ CREATE TABLE reservation_entity (
     user_id BIGINT,
     seat_id BIGINT,
     status ENUM('RESERVED', 'CANCELED'),
+    admission_type ENUM('FREE', 'PAID') NOT NULL DEFAULT 'PAID',
     active_seat_id BIGINT,
     canceled_at DATETIME(6),
     CONSTRAINT uk_reservation_active_seat UNIQUE (active_seat_id),

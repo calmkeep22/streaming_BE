@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('initialize', 'migrate-seat-pricing')]
+    [ValidateSet('initialize', 'migrate-seat-pricing', 'migrate-admission')]
     [string]$Operation = 'initialize',
     [string]$DbHost = '10.0.1.219',
     [int]$DbPort = 3306,
@@ -11,21 +11,25 @@ param(
 $ErrorActionPreference = 'Stop'
 $sshOptions = @('-i', $BackendKey, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
     '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10', '-o', "UserKnownHostsFile=$KnownHosts")
-if ($Operation -eq 'migrate-seat-pricing') {
+$migrationFile = switch ($Operation) {
+    'migrate-seat-pricing' { '002-seat-grade-pricing.sql' }
+    'migrate-admission' { '003-reservation-admission.sql' }
+}
+if ($migrationFile) {
     # Upload only the reviewed migration and runner. Do not rerun CI key/bootstrap setup.
     ssh @sshOptions "opc@$BackendHost" 'mkdir -p /opt/streaming/secure-ci-setup/deploy/backend/migrations'
     if ($LASTEXITCODE -ne 0) { throw 'Migration staging failed.' }
-    scp @sshOptions "$PSScriptRoot/scripts/migrate-seat-pricing.py" `
-        "opc@${BackendHost}:/opt/streaming/secure-ci-setup/deploy/scripts/migrate-seat-pricing.py"
+    scp @sshOptions "$PSScriptRoot/scripts/migrate-schema.py" `
+        "opc@${BackendHost}:/opt/streaming/secure-ci-setup/deploy/scripts/migrate-schema.py"
     if ($LASTEXITCODE -ne 0) { throw 'Migration runner upload failed.' }
-    scp @sshOptions "$PSScriptRoot/backend/migrations/002-seat-grade-pricing.sql" `
-        "opc@${BackendHost}:/opt/streaming/secure-ci-setup/deploy/backend/migrations/002-seat-grade-pricing.sql"
+    scp @sshOptions "$PSScriptRoot/backend/migrations/$migrationFile" `
+        "opc@${BackendHost}:/opt/streaming/secure-ci-setup/deploy/backend/migrations/$migrationFile"
     if ($LASTEXITCODE -ne 0) { throw 'Migration SQL upload failed.' }
 }
-$remoteScript = if ($Operation -eq 'migrate-seat-pricing') {
-    'sudo -n python3 -I /opt/streaming/secure-ci-setup/deploy/scripts/migrate-seat-pricing.py'
-} else {
-    'sudo -n python3 -I /opt/streaming/secure-ci-setup/deploy/scripts/configure-managed-mysql.py'
+$remoteScript = switch ($Operation) {
+    'migrate-seat-pricing' { 'sudo -n python3 -I /opt/streaming/secure-ci-setup/deploy/scripts/migrate-schema.py seat-pricing' }
+    'migrate-admission' { 'sudo -n python3 -I /opt/streaming/secure-ci-setup/deploy/scripts/migrate-schema.py admission' }
+    'initialize' { 'sudo -n python3 -I /opt/streaming/secure-ci-setup/deploy/scripts/configure-managed-mysql.py' }
 }
 $securePassword = Read-Host 'MySQL administrator password (hidden)' -AsSecureString
 $passwordPointer = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
