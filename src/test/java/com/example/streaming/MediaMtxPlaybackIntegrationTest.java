@@ -13,7 +13,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.utility.Transferable;
+import org.testcontainers.images.builder.Transferable;
 
 import java.net.URI;
 import java.net.http.*;
