@@ -149,7 +149,7 @@ class ReservationConcurrencyIntegrationTest {
         );
 
         var reservation =
-                reservationService.reserve(
+                reservationService.reserveFree(
                         event.getId(),
                         seat.getId(),
                         firstUser.getId()
@@ -284,7 +284,7 @@ class ReservationConcurrencyIntegrationTest {
 
 
         var newReservation =
-                reservationService.reserve(
+                reservationService.reserveFree(
                         event.getId(),
                         seat.getId(),
                         winnerId
@@ -367,7 +367,7 @@ class ReservationConcurrencyIntegrationTest {
 
         assertThat(redisSeatHoldService.getHolder(seat.getId())).isNull();
 
-        assertThatThrownBy(() -> reservationService.reserve(
+        assertThatThrownBy(() -> reservationService.reserveFree(
                 event.getId(),
                 seat.getId(),
                 firstUser.getId()
@@ -418,6 +418,33 @@ class ReservationConcurrencyIntegrationTest {
     }
 
 
+    @Test
+    void sameUserConcurrentFreeConfirmationReturnsOneReservation() throws Exception {
+        UserEntity user = createUser("free-retry@test.com");
+        EventEntity event = createEvent();
+        SeatEntity seat = createSeat(event, 1);
+        reservationService.holdSeat(event.getId(), seat.getId(), user.getId());
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<Long>> results = new ArrayList<>();
+            for (int i = 0; i < 20; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    return reservationService.reserveFree(event.getId(), seat.getId(), user.getId()).reservationId();
+                }));
+            }
+            start.countDown();
+            Long reservationId = results.getFirst().get(30, TimeUnit.SECONDS);
+            for (Future<Long> result : results) assertThat(result.get(30, TimeUnit.SECONDS)).isEqualTo(reservationId);
+            assertThat(reservationRepository.count()).isEqualTo(1);
+        } finally {
+            start.countDown();
+            pool.shutdownNow();
+            assertThat(pool.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
     private SeatEntity createSeat(
             EventEntity event,
             Integer seatNumber
@@ -426,7 +453,7 @@ class ReservationConcurrencyIntegrationTest {
         SeatEntity seat =
                 new SeatEntity(
                         event,
-                        seatNumber
+                        seatNumber, SeatGrade.FREE, 0L
                 );
 
         return seatRepository.save(seat);

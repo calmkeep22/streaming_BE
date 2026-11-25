@@ -3,6 +3,7 @@ package com.example.streaming.Service;
 import com.example.streaming.Entity.EventEntity;
 import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Entity.SeatEntity;
+import com.example.streaming.Entity.SeatGrade;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.UserEntity;
 import com.example.streaming.Exception.SeatUnavailableException;
@@ -68,7 +69,7 @@ class ReservationConcurrencyTest {
         RedisTestSupport.requireAvailable();
 
         event = eventRepository.save(new EventEntity("콘서트", LocalDateTime.now().plusDays(7)));
-        seat = seatRepository.save(new SeatEntity(event, 1));
+        seat = seatRepository.save(new SeatEntity(event, 1, SeatGrade.FREE, 0L));
 
         List<UserEntity> users = new ArrayList<>();
         for (int i = 1; i <= THREAD_COUNT; i++) {
@@ -128,11 +129,11 @@ class ReservationConcurrencyTest {
         reservationService.holdSeat(event.getId(), seat.getId(), holder);
 
         // 선점하지 않은 사용자는 확정 불가
-        assertThatThrownBy(() -> reservationService.reserve(event.getId(), seat.getId(), other))
+        assertThatThrownBy(() -> reservationService.reserveFree(event.getId(), seat.getId(), other))
                 .isInstanceOf(SeatUnavailableException.class);
 
         // 선점한 사용자는 확정 성공
-        assertThat(reservationService.reserve(event.getId(), seat.getId(), holder).status())
+        assertThat(reservationService.reserveFree(event.getId(), seat.getId(), holder).status())
                 .isEqualTo(ReservationStatus.RESERVED);
         assertThat(reservationRepository.existsBySeat_IdAndStatus(seat.getId(), ReservationStatus.RESERVED)).isTrue();
 
@@ -151,7 +152,7 @@ class ReservationConcurrencyTest {
         Long owner = userIds.get(0);
         Long nextOwner = userIds.get(1);
         reservationService.holdSeat(event.getId(), seat.getId(), owner);
-        var first = reservationService.reserve(event.getId(), seat.getId(), owner);
+        var first = reservationService.reserveFree(event.getId(), seat.getId(), owner);
 
         assertThatThrownBy(() -> reservationService.cancel(first.reservationId(), nextOwner))
                 .isInstanceOf(ForbiddenException.class);
@@ -161,7 +162,7 @@ class ReservationConcurrencyTest {
         reservationService.cancel(first.reservationId(), owner);
         assertThat(reservationRepository.findById(first.reservationId()).orElseThrow().getActiveSeatId()).isNull();
         reservationService.holdSeat(event.getId(), seat.getId(), nextOwner);
-        var second = reservationService.reserve(event.getId(), seat.getId(), nextOwner);
+        var second = reservationService.reserveFree(event.getId(), seat.getId(), nextOwner);
         reservationService.cancel(first.reservationId(), owner);
 
         assertThat(reservationRepository.count()).isEqualTo(2);
@@ -181,7 +182,7 @@ class ReservationConcurrencyTest {
         runConcurrently(userId -> {
             try {
                 reservationService.holdSeat(event.getId(), seat.getId(), userId);
-                reservationService.reserve(event.getId(), seat.getId(), userId);
+                reservationService.reserveFree(event.getId(), seat.getId(), userId);
                 reserved.incrementAndGet();
             } catch (SeatUnavailableException e) {
                 unavailable.incrementAndGet();

@@ -23,6 +23,9 @@ public interface PaymentRepository extends JpaRepository<PaymentEntity, Long> {
 
     boolean existsByOrderId(String orderId);
 
+    Optional<PaymentEntity> findByReservation_IdAndUser_IdAndSeat_IdAndStatus(
+            Long reservationId, Long userId, Long seatId, PaymentStatus status);
+
     // 예약에 연결된 결제 중 아직 환불이 끝나지 않은 것 (예약 취소 시 환불 대상)
     Optional<PaymentEntity> findByReservation_IdAndStatusIn(Long reservationId, Collection<PaymentStatus> statuses);
 

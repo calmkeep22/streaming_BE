@@ -7,6 +7,7 @@ import com.example.streaming.Entity.ReservationEntity;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.SeatStatus;
+import com.example.streaming.Entity.SeatGrade;
 import com.example.streaming.Entity.UserEntity;
 import com.example.streaming.Exception.SeatUnavailableException;
 import com.example.streaming.Exception.ForbiddenException;
@@ -74,7 +75,7 @@ class ReservationServiceTest {
         event = new EventEntity("콘서트", LocalDateTime.now().plusDays(7));
         ReflectionTestUtils.setField(event, "id", 1L);
 
-        seat = new SeatEntity(event, 10);
+        seat = new SeatEntity(event, 10, SeatGrade.FREE, 0L);
         ReflectionTestUtils.setField(seat, "id", 100L);
 
         user = new UserEntity("user1@test.com", "password");
@@ -266,14 +267,14 @@ class ReservationServiceTest {
         given(seatRepository.findById(100L)).willReturn(Optional.of(seat));
         given(redisSeatHoldService.isHeldBy(100L, 1L)).willReturn(true);
         given(reservationRepository.existsBySeat_IdAndStatus(100L, ReservationStatus.RESERVED)).willReturn(false);
-        given(reservationRepository.save(any(ReservationEntity.class)))
+        given(reservationRepository.saveAndFlush(any(ReservationEntity.class)))
                 .willAnswer(inv -> {
                     ReservationEntity r = inv.getArgument(0);
                     ReflectionTestUtils.setField(r, "id", 999L);
                     return r;
                 });
 
-        ReservationResponse response = reservationService.reserve(1L, 100L, 1L);
+        ReservationResponse response = reservationService.reserveFree(1L, 100L, 1L);
 
         assertThat(response.reservationId()).isEqualTo(999L);
         assertThat(response.userId()).isEqualTo(1L);
@@ -281,8 +282,9 @@ class ReservationServiceTest {
         assertThat(response.status()).isEqualTo(ReservationStatus.RESERVED);
 
         ArgumentCaptor<ReservationEntity> captor = ArgumentCaptor.forClass(ReservationEntity.class);
-        verify(reservationRepository).save(captor.capture());
+        verify(reservationRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(ReservationStatus.RESERVED);
+        assertThat(captor.getValue().getAdmissionType()).isEqualTo(com.example.streaming.Entity.AdmissionType.FREE);
 
         // 단위 테스트에는 트랜잭션이 없어 즉시 해제된다 (실제로는 커밋 후 해제: ReservationConcurrencyTest에서 확인)
         verify(redisSeatHoldService).release(100L, 1L);
@@ -295,10 +297,10 @@ class ReservationServiceTest {
         given(seatRepository.findById(100L)).willReturn(Optional.of(seat));
         given(redisSeatHoldService.isHeldBy(100L, 1L)).willReturn(false);
 
-        assertThatThrownBy(() -> reservationService.reserve(1L, 100L, 1L))
+        assertThatThrownBy(() -> reservationService.reserveFree(1L, 100L, 1L))
                 .isInstanceOf(SeatUnavailableException.class)
                 .hasMessage("선점 중인 좌석이 아니거나 선점 시간이 만료되었습니다.");
-        verify(reservationRepository, never()).save(any());
+        verify(reservationRepository, never()).saveAndFlush(any());
         verify(redisSeatHoldService, never()).release(anyLong(), anyLong());
     }
 
@@ -310,10 +312,10 @@ class ReservationServiceTest {
         given(redisSeatHoldService.isHeldBy(100L, 1L)).willReturn(true);
         given(reservationRepository.existsBySeat_IdAndStatus(100L, ReservationStatus.RESERVED)).willReturn(true);
 
-        assertThatThrownBy(() -> reservationService.reserve(1L, 100L, 1L))
+        assertThatThrownBy(() -> reservationService.reserveFree(1L, 100L, 1L))
                 .isInstanceOf(SeatUnavailableException.class)
                 .hasMessage("이미 예약된 좌석입니다.");
-        verify(reservationRepository, never()).save(any());
+        verify(reservationRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -323,10 +325,10 @@ class ReservationServiceTest {
         given(seatRepository.findById(100L)).willReturn(Optional.of(seat));
         given(redisSeatHoldService.isHeldBy(100L, 1L)).willReturn(true);
         given(reservationRepository.existsBySeat_IdAndStatus(100L, ReservationStatus.RESERVED)).willReturn(false);
-        given(reservationRepository.save(any(ReservationEntity.class)))
+        given(reservationRepository.saveAndFlush(any(ReservationEntity.class)))
                 .willThrow(new DataIntegrityViolationException("uk_reservation_seat"));
 
-        assertThatThrownBy(() -> reservationService.reserve(1L, 100L, 1L))
+        assertThatThrownBy(() -> reservationService.reserveFree(1L, 100L, 1L))
                 .isInstanceOf(SeatUnavailableException.class)
                 .hasMessage("이미 예약된 좌석입니다.");
         verify(redisSeatHoldService, never()).release(anyLong(), anyLong());
@@ -339,10 +341,10 @@ class ReservationServiceTest {
         given(seatRepository.findById(100L)).willReturn(Optional.of(seat));
         given(redisSeatHoldService.isHeldBy(100L, 1L)).willReturn(true);
         given(reservationRepository.existsBySeat_IdAndStatus(100L, ReservationStatus.RESERVED)).willReturn(false);
-        given(reservationRepository.save(any(ReservationEntity.class))).willAnswer(inv -> inv.getArgument(0));
+        given(reservationRepository.saveAndFlush(any(ReservationEntity.class))).willAnswer(inv -> inv.getArgument(0));
         given(redisSeatHoldService.release(100L, 1L)).willThrow(new IllegalStateException("redis down"));
 
-        assertThat(reservationService.reserve(1L, 100L, 1L).status()).isEqualTo(ReservationStatus.RESERVED);
+        assertThat(reservationService.reserveFree(1L, 100L, 1L).status()).isEqualTo(ReservationStatus.RESERVED);
     }
 
     @Test
@@ -351,7 +353,7 @@ class ReservationServiceTest {
         given(userRepository.findById(1L)).willReturn(Optional.of(user));
         given(seatRepository.findById(100L)).willReturn(Optional.of(seat));
 
-        assertThatThrownBy(() -> reservationService.reserve(2L, 100L, 1L))
+        assertThatThrownBy(() -> reservationService.reserveFree(2L, 100L, 1L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("해당 이벤트의 좌석이 아닙니다.");
         verify(redisSeatHoldService, never()).isHeldBy(anyLong(), anyLong());
@@ -362,7 +364,7 @@ class ReservationServiceTest {
     void reserve_userNotFound() {
         given(userRepository.findById(1L)).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> reservationService.reserve(1L, 100L, 1L))
+        assertThatThrownBy(() -> reservationService.reserveFree(1L, 100L, 1L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("사용자가 존재하지 않습니다.");
         verify(seatRepository, never()).findById(any());
@@ -374,7 +376,7 @@ class ReservationServiceTest {
         given(userRepository.findById(1L)).willReturn(Optional.of(user));
         given(seatRepository.findById(100L)).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> reservationService.reserve(1L, 100L, 1L))
+        assertThatThrownBy(() -> reservationService.reserveFree(1L, 100L, 1L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("좌석이 존재하지 않습니다.");
     }

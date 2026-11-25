@@ -3,6 +3,8 @@ package com.example.streaming.Service;
 import com.example.streaming.Dto.HoldResponse;
 import com.example.streaming.Dto.ReservationResponse;
 import com.example.streaming.Entity.ReservationEntity;
+import com.example.streaming.Entity.AdmissionType;
+import com.example.streaming.Entity.SeatGrade;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.SeatStatus;
@@ -21,12 +23,15 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 
 @Service
 public class ReservationService {
@@ -132,17 +137,51 @@ public class ReservationService {
     }
 
     /**
-     * 2단계: 예약 확정.
+     * 무료 좌석 예약 확정. 유료 좌석은 PaymentService의 결제 성공 경로에서만 확정한다.
      * Redis에서 본인 선점을 확인한 뒤 MySQL에 RESERVED 예약을 만들고, 커밋이 성공하면 Redis 선점을 지운다.
      */
-    @Transactional
-    public ReservationResponse reserve(Long eventId, Long seatId, Long userId) {
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public ReservationResponse reserveFree(Long eventId, Long seatId, Long userId) {
+        ReservationResponse response;
+        try {
+            response = transactionTemplate.execute(status -> createFreeReservation(eventId, seatId, userId));
+        } catch (DataIntegrityViolationException | SeatUnavailableException e) {
+            // 실패한 트랜잭션이 롤백된 뒤 새 트랜잭션으로 읽는다. 같은 사용자의 동시 재시도는 같은 예약을 반환한다.
+            response = transactionTemplate.execute(status -> existingFreeReservation(eventId, seatId, userId)
+                    .map(ReservationResponse::from).orElse(null));
+            if (response == null) {
+                if (e instanceof SeatUnavailableException unavailable) {
+                    throw unavailable;
+                }
+                alreadyReservedCounter.increment();
+                throw new SeatUnavailableException("이미 예약된 좌석입니다.");
+            }
+        }
+        successCounter.increment();
+        return Objects.requireNonNull(response);
+    }
+
+    private Optional<ReservationEntity> existingFreeReservation(Long eventId, Long seatId, Long userId) {
+        return reservationRepository.findBySeat_IdAndUser_IdAndStatus(seatId, userId, ReservationStatus.RESERVED)
+                .filter(reservation -> reservation.getAdmissionType() == AdmissionType.FREE
+                        && reservation.getSeat().getEvent().getId().equals(eventId));
+    }
+
+    private ReservationResponse createFreeReservation(Long eventId, Long seatId, Long userId) {
         UserEntity user = userRepository.findById(userId)
                 .orElseThrow(() ->
                         new IllegalArgumentException("사용자가 존재하지 않습니다."));
 
         SeatEntity seat = findSeat(seatId);
         validateEvent(seat, eventId);
+
+        Optional<ReservationEntity> existing = existingFreeReservation(eventId, seatId, userId);
+        if (existing.isPresent()) {
+            return ReservationResponse.from(existing.get());
+        }
+        if (seat.getGrade() != SeatGrade.FREE || seat.getPrice() != 0L) {
+            throw new IllegalArgumentException("무료 좌석만 결제 없이 예약할 수 있습니다.");
+        }
 
         if (!redisSeatHoldService.isHeldBy(seatId, userId)) {
             throw new SeatUnavailableException("선점 중인 좌석이 아니거나 선점 시간이 만료되었습니다.");
@@ -153,17 +192,10 @@ public class ReservationService {
             throw new SeatUnavailableException("이미 예약된 좌석입니다.");
         }
 
-        ReservationEntity reservation;
-        try {
-            reservation = reservationRepository.save(ReservationEntity.reserved(user, seat));
-        } catch (DataIntegrityViolationException e) {
-            // Redis와 DB는 한 트랜잭션이 아니라서 위 확인을 통과한 요청이 둘일 수 있다. seat_id 유니크 제약이 최종 방어선
-            alreadyReservedCounter.increment();
-            throw new SeatUnavailableException("이미 예약된 좌석입니다.");
-        }
+        // Redis 선점 만료/장애로 경합이 생겨도 active_seat_id 유니크 제약으로 중복 확정을 막는다.
+        ReservationEntity reservation = reservationRepository.saveAndFlush(ReservationEntity.free(user, seat));
 
         releaseHoldAfterCommit(seatId, userId);
-        successCounter.increment();
 
         return toResponse(reservation);
     }

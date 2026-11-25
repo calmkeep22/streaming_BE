@@ -88,8 +88,38 @@ trigger normal CI/CD. Rollbacks may keep the added columns.
 New event requests specify either the legacy `seatCount` (STANDARD/50000 KRW)
 or `seatSections` with grade/count/price. Grades are FREE, STANDARD, PREMIUM, VIP.
 Prices are configured per event: FREE must be zero; paid grades must be positive.
-Payment orders retain their prepared amount and grade. Free-seat admission is a
-separate next step; free seats cannot create paid orders.
+Payment orders retain their prepared amount and grade. Free seats cannot create
+paid orders.
+
+## Free reservations and admission
+
+Before deploying admission code, run the additional migration as the operator:
+
+```powershell
+.\deploy\configure-backend.ps1 -Operation migrate-admission
+```
+
+This adds `reservation_entity.admission_type`. Existing rows default to PAID,
+so old reservations without successful payment do not become free tickets.
+Migration retries preserve FREE reservations created after the first run.
+The administrator password is entered at the hidden prompt and is not saved.
+
+- `POST /events/{eventId}/seats/{seatId}/holds`: acquire a seat hold.
+- FREE: `POST /events/{eventId}/seats/{seatId}/free-reservations` confirms the
+  caller's held free seat without creating a payment. Repeated/concurrent
+  successful requests return the same active reservation ID (201).
+- Paid grades: use the existing payment prepare/confirm APIs.
+- `GET /events/{eventId}/seats/{seatId}/admission`: returns 200 with reservation,
+  event, seat and grade only when the authenticated caller has an active FREE
+  reservation or an active PAID reservation with a matching SUCCESS payment.
+  Missing, foreign, canceled and unpaid reservations all return the same 403.
+  Admission responses use `Cache-Control: no-store`.
+
+FREE/PAID is fixed at reservation creation; the paid grade comes from the order
+snapshot. Changing the seat later does not upgrade existing tickets. Canceling
+a reservation revokes admission even while its refund is still pending.
+This endpoint checks current database state; it does not issue a streaming token
+or protect MediaMTX playback yet. Media authorization is the next integration.
 
 ## Remaining production work
 
