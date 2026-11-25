@@ -6,6 +6,7 @@ import com.example.streaming.Entity.PaymentStatus;
 import com.example.streaming.Entity.ReservationEntity;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
+import com.example.streaming.Entity.SeatGrade;
 import com.example.streaming.Entity.UserEntity;
 import com.example.streaming.Exception.ForbiddenException;
 import com.example.streaming.Exception.PaymentGatewayException;
@@ -17,7 +18,6 @@ import com.example.streaming.Repository.SeatRepository;
 import com.example.streaming.Repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -42,7 +42,6 @@ public class PaymentService {
     private final RedisSeatHoldService redisSeatHoldService;
     private final PaymentGateway paymentGateway;
     private final TransactionTemplate transactionTemplate;
-    private final long ticketPrice;
 
     public PaymentService(
             PaymentRepository paymentRepository,
@@ -51,8 +50,7 @@ public class PaymentService {
             UserRepository userRepository,
             RedisSeatHoldService redisSeatHoldService,
             PaymentGateway paymentGateway,
-            TransactionTemplate transactionTemplate,
-            @Value("${payment.ticket-price:50000}") long ticketPrice
+            TransactionTemplate transactionTemplate
     ) {
         this.paymentRepository = paymentRepository;
         this.reservationRepository = reservationRepository;
@@ -61,7 +59,6 @@ public class PaymentService {
         this.redisSeatHoldService = redisSeatHoldService;
         this.paymentGateway = paymentGateway;
         this.transactionTemplate = transactionTemplate;
-        this.ticketPrice = ticketPrice;
     }
 
     @Transactional(readOnly = true)
@@ -92,13 +89,16 @@ public class PaymentService {
         if (!seat.getEvent().getId().equals(eventId)) {
             throw new IllegalArgumentException("해당 이벤트의 좌석이 아닙니다.");
         }
+        if (seat.getGrade() == SeatGrade.FREE) {
+            throw new IllegalArgumentException("무료 좌석은 결제 주문을 생성할 수 없습니다.");
+        }
         validateSeatStillHeld(seatId, userId);
 
         PaymentEntity payment = PaymentEntity.ready(
                 generateOrderId(),
                 user,
                 seat,
-                ticketPrice,
+                seat.getPrice(),
                 paymentGateway.providerName()
         );
         return PaymentResponse.from(paymentRepository.save(payment));

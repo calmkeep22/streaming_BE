@@ -18,6 +18,8 @@ CREATE TABLE seat_entity (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     event_id BIGINT,
     seat_number INT,
+    grade ENUM('FREE', 'STANDARD', 'PREMIUM', 'VIP') NOT NULL DEFAULT 'STANDARD',
+    price BIGINT NOT NULL DEFAULT 50000,
     version BIGINT,
     CONSTRAINT fk_seat_event FOREIGN KEY (event_id) REFERENCES event_entity(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -41,6 +43,7 @@ CREATE TABLE payments (
     seat_id BIGINT NOT NULL,
     reservation_id BIGINT,
     amount BIGINT NOT NULL,
+    seat_grade ENUM('FREE', 'STANDARD', 'PREMIUM', 'VIP') NOT NULL DEFAULT 'STANDARD',
     currency VARCHAR(3) NOT NULL,
     status ENUM('READY', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELED',
                 'REFUND_PENDING', 'NEEDS_REVIEW', 'CANCEL_PENDING') NOT NULL,

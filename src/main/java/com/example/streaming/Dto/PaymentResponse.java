@@ -2,6 +2,7 @@ package com.example.streaming.Dto;
 
 import com.example.streaming.Entity.PaymentEntity;
 import com.example.streaming.Entity.PaymentStatus;
+import com.example.streaming.Entity.SeatGrade;
 
 public record PaymentResponse(
         Long paymentId,
@@ -10,7 +11,8 @@ public record PaymentResponse(
         Long seatId,
         Long amount,
         String currency,
-        PaymentStatus status
+        PaymentStatus status,
+        SeatGrade seatGrade
 ) {
     public static PaymentResponse from(PaymentEntity payment) {
         Long reservationId = payment.getReservation() == null
@@ -24,7 +26,8 @@ public record PaymentResponse(
                 payment.getSeat().getId(),
                 payment.getAmount(),
                 payment.getCurrency(),
-                payment.getStatus()
+                payment.getStatus(),
+                payment.getSeatGrade()
         );
     }
 }

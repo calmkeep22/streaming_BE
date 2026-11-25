@@ -58,8 +58,13 @@ public class PaymentEntity {
     private ReservationEntity reservation;
 
     // KRW 원 단위 정수. 부동소수점 타입은 금액 계산에 사용하지 않는다.
-    @Column(nullable = false)
+    @Column(nullable = false, updatable = false)
     private Long amount;
+
+    // 주문 생성 시점의 등급. 이후 좌석 정보가 바뀌어도 주문은 유지한다.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "seat_grade", nullable = false, updatable = false, length = 20)
+    private SeatGrade seatGrade;
 
     @Column(nullable = false, length = 3)
     private String currency;
@@ -135,6 +140,7 @@ public class PaymentEntity {
         payment.user = user;
         payment.seat = seat;
         payment.amount = amount;
+        payment.seatGrade = seat.getGrade();
         payment.currency = "KRW";
         payment.provider = provider;
         payment.status = PaymentStatus.READY;

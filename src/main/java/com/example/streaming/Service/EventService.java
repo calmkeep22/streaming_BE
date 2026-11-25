@@ -5,10 +5,12 @@ import com.example.streaming.Dto.EventPageResponse;
 import com.example.streaming.Dto.EventResponse;
 import com.example.streaming.Dto.EventSearchRequest;
 import com.example.streaming.Dto.SeatResponse;
+import com.example.streaming.Dto.SeatSectionRequest;
 import com.example.streaming.Entity.EventEntity;
 import com.example.streaming.Entity.ReservationStatus;
 import com.example.streaming.Entity.SeatEntity;
 import com.example.streaming.Entity.SeatStatus;
+import com.example.streaming.Entity.SeatGrade;
 import com.example.streaming.Exception.EventNotFoundException;
 import com.example.streaming.Repository.EventRepository;
 import com.example.streaming.Repository.ReservationRepository;
@@ -32,7 +34,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 @Service
 public class EventService {
@@ -91,6 +92,7 @@ public class EventService {
 
     @Transactional
     public EventResponse createEvent(EventCreateRequest request) {
+        List<SeatSectionRequest> sections = validateSections(request);
 
         EventEntity event =
                 new EventEntity(
@@ -100,9 +102,12 @@ public class EventService {
 
         eventRepository.save(event);
 
-        List<SeatEntity> seats = IntStream.rangeClosed(1, request.seatCount())
-                .mapToObj(seatNumber -> new SeatEntity(event, seatNumber))
-                .toList();
+        List<SeatEntity> seats = new ArrayList<>();
+        for (SeatSectionRequest section : sections) {
+            for (int i = 0; i < section.seatCount(); i++) {
+                seats.add(new SeatEntity(event, seats.size() + 1, section.grade(), section.price()));
+            }
+        }
         seatRepository.saveAll(seats);
 
         return new EventResponse(
@@ -111,6 +116,37 @@ public class EventService {
                 event.getStartTime(),
                 seats.size()
         );
+    }
+
+    private List<SeatSectionRequest> validateSections(EventCreateRequest request) {
+        if ((request.seatCount() == null) == (request.seatSections() == null)) {
+            throw new IllegalArgumentException("seatCount 또는 seatSections 중 하나만 지정해야 합니다.");
+        }
+        List<SeatSectionRequest> sections = request.seatSections();
+        if (sections == null) {
+            sections = List.of(new SeatSectionRequest(SeatGrade.STANDARD,
+                    request.seatCount(), SeatEntity.LEGACY_STANDARD_PRICE));
+        }
+        if (sections.isEmpty() || sections.size() > SeatGrade.values().length) {
+            throw new IllegalArgumentException("좌석 구역은 1개 이상 4개 이하여야 합니다.");
+        }
+        Set<SeatGrade> grades = new HashSet<>();
+        int total = 0;
+        for (SeatSectionRequest section : sections) {
+            if (section == null || section.grade() == null || section.seatCount() == null
+                    || section.seatCount() < 1 || section.seatCount() > 1000) {
+                throw new IllegalArgumentException("좌석 등급과 1~1000 사이의 좌석 수가 필요합니다.");
+            }
+            section.grade().validatePrice(section.price());
+            if (!grades.add(section.grade())) {
+                throw new IllegalArgumentException("같은 좌석 등급을 중복 지정할 수 없습니다.");
+            }
+            total += section.seatCount();
+        }
+        if (total > 1000) {
+            throw new IllegalArgumentException("전체 좌석 수는 1000개 이하여야 합니다.");
+        }
+        return sections;
     }
 
     @Transactional(readOnly = true)
@@ -178,7 +214,7 @@ public class EventService {
             SeatStatus status = reservedSeatIds.contains(seat.getId())
                     ? SeatStatus.RESERVED
                     : holders.get(i) != null ? SeatStatus.HELD : SeatStatus.AVAILABLE;
-            responses.add(new SeatResponse(seat.getId(), seat.getSeatNumber(), status));
+            responses.add(SeatResponse.from(seat, status));
         }
         return responses;
     }
@@ -200,11 +236,7 @@ public class EventService {
 
         // 4. DTO 변환
         return mappingTimer.record(() ->
-                new SeatResponse(
-                        seat.getId(),
-                        seat.getSeatNumber(),
-                        status
-                )
+                SeatResponse.from(seat, status)
         );
     }
 

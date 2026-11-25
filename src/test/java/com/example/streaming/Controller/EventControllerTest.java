@@ -6,6 +6,7 @@ import com.example.streaming.Dto.EventResponse;
 import com.example.streaming.Dto.HoldResponse;
 import com.example.streaming.Dto.SeatResponse;
 import com.example.streaming.Entity.SeatStatus;
+import com.example.streaming.Entity.SeatGrade;
 import com.example.streaming.Service.CustomUserDetailService;
 import com.example.streaming.Service.EventService;
 import com.example.streaming.Service.ReservationService;
@@ -147,9 +148,9 @@ class EventControllerTest {
     @DisplayName("이벤트 좌석 목록 조회 시 200과 좌석별 상태를 반환한다")
     void getSeats() throws Exception {
         given(eventService.getSeats(1L)).willReturn(List.of(
-                new SeatResponse(100L, 1, SeatStatus.AVAILABLE),
-                new SeatResponse(101L, 2, SeatStatus.HELD),
-                new SeatResponse(102L, 3, SeatStatus.RESERVED)));
+                new SeatResponse(100L, 1, SeatStatus.AVAILABLE, SeatGrade.STANDARD, 50_000L),
+                new SeatResponse(101L, 2, SeatStatus.HELD, SeatGrade.STANDARD, 50_000L),
+                new SeatResponse(102L, 3, SeatStatus.RESERVED, SeatGrade.STANDARD, 50_000L)));
 
         mockMvc.perform(get("/events/{eventId}/seats", 1L).with(jwt()))
                 .andExpect(status().isOk())
@@ -175,7 +176,7 @@ class EventControllerTest {
     @DisplayName("좌석 조회 시 200과 좌석 정보를 반환한다")
     void getSeat() throws Exception {
         given(eventService.getSeat(100L))
-                .willReturn(new SeatResponse(100L, 10, SeatStatus.AVAILABLE));
+                .willReturn(new SeatResponse(100L, 10, SeatStatus.AVAILABLE, SeatGrade.STANDARD, 50_000L));
 
         mockMvc.perform(get("/events/seats/{seatId}", 100L).with(jwt()))
                 .andExpect(status().isOk())

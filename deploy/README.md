@@ -65,6 +65,32 @@ Application rollback does not revert database schema. Apply backward-compatible
 schema migrations explicitly. Never run `docker compose down -v` against persistent
 data. Three Sentinels on one VM handle Redis process failures, not VM failures.
 
+## Seat pricing schema upgrade
+
+Before deploying the seat-pricing application, apply
+`backend/migrations/002-seat-grade-pricing.sql` as the DB administrator.
+It preserves existing seats as STANDARD/50000 KRW and existing payment amounts.
+Existing orders receive STANDARD as their historical grade. Each column is
+checked independently so partial execution and retries preserve data.
+
+Run on the operator's Windows PC after reviewing the migration:
+
+```powershell
+.\deploy\configure-backend.ps1 -Operation migrate-seat-pricing
+```
+
+The command uploads only this migration and its runner, then prompts for the
+administrator password (hidden). It is sent over SSH stdin
+and is not stored in GitHub or the VM environment. The application account keeps
+DML privileges only. After this command succeeds, merge the application PR to
+trigger normal CI/CD. Rollbacks may keep the added columns.
+
+New event requests specify either the legacy `seatCount` (STANDARD/50000 KRW)
+or `seatSections` with grade/count/price. Grades are FREE, STANDARD, PREMIUM, VIP.
+Prices are configured per event: FREE must be zero; paid grades must be positive.
+Payment orders retain their prepared amount and grade. Free-seat admission is a
+separate next step; free seats cannot create paid orders.
+
 ## Remaining production work
 
 TLS is currently required for DB connections. Install the service CA and configure
