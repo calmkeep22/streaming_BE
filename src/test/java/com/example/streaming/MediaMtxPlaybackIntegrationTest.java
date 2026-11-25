@@ -14,6 +14,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.Testcontainers;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.Transferable;
+import org.testcontainers.containers.wait.strategy.Wait;
 
 import java.net.URI;
 import java.net.http.*;
@@ -48,16 +49,32 @@ class MediaMtxPlaybackIntegrationTest {
     GenericContainer<?> media;
     final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     String base;
+    UserEntity user;
+    EventEntity event;
+    SeatEntity seat;
+    com.example.streaming.Dto.ReservationResponse reservation;
+    String anotherPath;
 
     @BeforeAll void startMedia() throws Exception {
+        given(holds.isHeldBy(anyLong(), anyLong())).willReturn(true);
+        user = users.save(new UserEntity("media-e2e@test.com", "password"));
+        event = events.save(new EventEntity("Media test", LocalDateTime.now().plusDays(1)));
+        seat = seats.save(new SeatEntity(event, 1, SeatGrade.FREE, 0L));
+        reservation = reservations.reserveFree(event.getId(), seat.getId(), user.getId());
+        anotherPath = "events/" + (event.getId() + 1);
         Testcontainers.exposeHostPorts(port);
         String config = Files.readString(Path.of("deploy/media/mediamtx.yml"))
+                // MediaMTX permits alwaysAvailable on concrete paths only; auth remains the production HTTP flow.
+                .replace("\"~^events/[1-9][0-9]*$\":", "\"events/" + event.getId() + "\":\n  \"" + anotherPath + "\":")
                 + "\npathDefaults:\n  alwaysAvailable: true\n  alwaysAvailableTracks:\n    - codec: H264\n";
         media = new GenericContainer<>("bluenviron/mediamtx:1.21.4")
                 .withCopyToContainer(Transferable.of(config.getBytes(StandardCharsets.UTF_8)), "/mediamtx.yml")
                 .withEnv("MTX_AUTHHTTPADDRESS", "http://host.testcontainers.internal:" + port + "/internal/media/auth")
                 .withEnv("MTX_READTIMEOUT", "2s").withEnv("MTX_WEBRTCHANDSHAKETIMEOUT", "30s")
-                .withExposedPorts(8889, 9997);
+                .withExposedPorts(8889, 9997)
+                // Distroless image has no shell for internal port probes.
+                .waitingFor(Wait.forHttp("/v3/paths/list").forPort(9997)
+                        .withBasicCredentials("monitor", "monitor-test").forStatusCode(200));
         media.start();
         base = "http://" + media.getHost() + ":" + media.getMappedPort(8889);
     }
@@ -65,17 +82,12 @@ class MediaMtxPlaybackIntegrationTest {
     @AfterAll void stopMedia() { if (media != null) media.stop(); }
 
     @Test void actualWhepChecksTokensRevocationExpiryAndFailsClosed() throws Exception {
-        given(holds.isHeldBy(anyLong(), anyLong())).willReturn(true);
-        var user = users.save(new UserEntity("media-e2e@test.com", "password"));
-        var event = events.save(new EventEntity("Media test", LocalDateTime.now().plusDays(1)));
-        var seat = seats.save(new SeatEntity(event, 1, SeatGrade.FREE, 0L));
-        var reservation = reservations.reserveFree(event.getId(), seat.getId(), user.getId());
         var ticket = playback.issue(event.getId(), seat.getId(), user.getId(), Instant.now().plusSeconds(3600));
         String path = "/" + ticket.path() + "/whep";
         assertThat(whep(path, null).statusCode()).isIn(401, 403);
         String legacy = "Basic " + Base64.getEncoder().encodeToString("viewer:old-shared-password".getBytes(StandardCharsets.UTF_8));
         assertThat(whep(path, legacy).statusCode()).isIn(401, 403);
-        assertThat(whep("/events/999999/whep", "Bearer " + ticket.token()).statusCode()).isIn(401, 403);
+        assertThat(whep("/" + anotherPath + "/whep", "Bearer " + ticket.token()).statusCode()).isIn(401, 403);
         HttpResponse<String> connected = whep(path, "Bearer " + ticket.token());
         assertThat(connected.statusCode()).as("valid WHEP ticket").isEqualTo(201);
         assertThat(connected.body()).contains("m=video", "a=ice-ufrag:");
