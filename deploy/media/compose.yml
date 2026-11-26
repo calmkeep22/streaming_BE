@@ -10,11 +10,14 @@ services:
       - /tmp:size=16m,mode=1777
     environment:
       MTX_WEBRTCADDITIONALHOSTS: ${MEDIA_PUBLIC_IP:?Set MEDIA_PUBLIC_IP}
+      MTX_AUTHHTTPADDRESS: ${MEDIA_AUTH_URL:?Set private backend media authentication URL}
+      MTX_AUTHHTTPFINGERPRINT: ${MEDIA_AUTH_FINGERPRINT:?Set backend callback certificate SHA-256 fingerprint}
+      # Ignored by authMethod=http; retain the previous credentials for configuration rollback.
       MTX_AUTHINTERNALUSERS_0_USER: publisher
       MTX_AUTHINTERNALUSERS_0_PASS: ${MEDIAMTX_PUBLISH_PASSWORD:?Set publisher password}
       MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_ACTION: publish
       MTX_AUTHINTERNALUSERS_1_USER: viewer
-      MTX_AUTHINTERNALUSERS_1_PASS: ${MEDIAMTX_READ_PASSWORD:?Set viewer password}
+      MTX_AUTHINTERNALUSERS_1_PASS: ${MEDIAMTX_READ_PASSWORD:?Set legacy viewer password}
       MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_ACTION: read
       MTX_AUTHINTERNALUSERS_2_USER: monitor
       MTX_AUTHINTERNALUSERS_2_PASS: ${MEDIAMTX_MONITOR_PASSWORD:?Set monitor password}

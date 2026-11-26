@@ -55,7 +55,8 @@ IP, arrange a fixed runner IP, private network, or another deployment transport.
 ## Deployment and rollback
 
 PRs run `Test`. Pushes to `main` run `Deploy`: test, build amd64 image, publish
-to GHCR, deploy backend/media. Manual dispatch is limited to `main`.
+to GHCR, deploy backend, then deploy media after the backend succeeds. Manual
+dispatch is limited to `main`. The order keeps HTTP media authentication available.
 Successful health checks update the last-good image/configuration. Failed releases
 restore that state; failed first releases stop the application without deleting
 volumes. Application restarts cause a brief interruption. Redis processes are not
@@ -118,13 +119,52 @@ The administrator password is entered at the hidden prompt and is not saved.
 FREE/PAID is fixed at reservation creation; the paid grade comes from the order
 snapshot. Changing the seat later does not upgrade existing tickets. Canceling
 a reservation revokes admission even while its refund is still pending.
-This endpoint checks current database state; it does not issue a streaming token
-or protect MediaMTX playback yet. Media authorization is the next integration.
+This endpoint checks current database state. Playback tickets use the same checks.
+
+## Media playback authentication
+
+Before the first playback-auth release, the operator runs
+`python deploy/configure-media-auth.py --apply`. It prepares the reviewed
+root-owned Compose/Nginx files on both VMs, preserves backups, generates an
+independent media signing key and a private TLS certificate on the backend, and transfers only SHA-256 hashes
+of the existing publisher/monitor credentials. It neither rotates CI keys nor
+prints passwords/signing keys. It does not restart the running services.
+
+Allow TCP 8082 to the backend private address 10.0.0.217 from the media private
+address **10.0.0.150/32** in the VCN. The callback uses HTTPS with the backend
+certificate fingerprint pinned in MediaMTX. Preserve the generated certificate
+across retries; renew it and update the fingerprint before its one-year expiry.
+The callback listener serves only
+`POST /internal/media/auth`; application routes are not served there. Normal
+application Nginx rejects `/internal/`. Playback/publishing/API ports remain
+bound to loopback until public HTTPS and client networking are configured.
+
+Authenticated users request `POST /events/{eventId}/seats/{seatId}/playback-tickets`.
+The response contains `token`, `path` (`events/{eventId}`), `whepPath`, `expiresAt`
+and the booked `grade`. Pass the token as `Authorization: Bearer <token>` to
+MediaMTX WHEP; keep it out of URLs, logs and shared viewer passwords.
+
+MediaMTX uses HTTP authentication with no excluded actions. Reads require a
+separate media JWT, a matching path/reservation and current valid DB admission.
+Login JWTs and media JWTs cannot be interchanged. Publisher credentials grant
+publish only for existing events; monitor credentials grant API only.
+The previous internal credential entries exist only for configuration rollback
+and are ignored while HTTP authentication is active.
+
+Tickets last two minutes by default (maximum five), capped by login expiration.
+The callback returns MediaMTX `expireAt`, which closes the session when its lease
+ends. Cancellation immediately denies new connections, including reuse of an old
+ticket; an already connected session may continue until its lease expires.
+Clients must obtain a new ticket and reconnect for continued viewing. This release
+does not implement seamless player reconnection or a frontend.
+
+Authentication protocol: [MediaMTX HTTP authentication](https://mediamtx.org/docs/features/authentication).
+Pinned server configuration: [MediaMTX v1.21.4](https://github.com/bluenviron/mediamtx/blob/v1.21.4/mediamtx.yml).
 
 ## Remaining production work
 
 TLS is currently required for DB connections. Install the service CA and configure
 VERIFY_IDENTITY for certificate and hostname verification. Add a domain/HTTPS and
-ticket-based media authorization before opening application/media traffic publicly.
-Static media publisher/viewer accounts and `PAYMENT_GATEWAY=fake` are bootstrap/demo
-settings. Export managed MySQL data before the Oracle trial ends.
+the player before opening application/media traffic publicly. Publisher/monitor
+credentials remain operator-only and `PAYMENT_GATEWAY=fake` remains a demo setting.
+Export managed MySQL data before the Oracle trial ends.

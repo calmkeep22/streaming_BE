@@ -52,6 +52,8 @@ public class SecurityConfig {
                                 "/payment-test.html"
                         ).permitAll()
                         .requestMatchers(this::isManagementMonitoringRequest).permitAll()
+                        // MediaMTX presents its client's scoped media token or machine credential in the body.
+                        .requestMatchers(HttpMethod.POST, "/internal/media/auth").permitAll()
                         .requestMatchers(HttpMethod.POST, "/events").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2->
